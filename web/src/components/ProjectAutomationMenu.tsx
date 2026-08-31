@@ -5,7 +5,12 @@ import { ProjectIcon, RecurrenceIcon } from "./SemanticIcons";
 import { TaskPropertyPicker } from "./TaskPropertyPicker";
 import { TaskboardIcon } from "./TaskboardIcon";
 import { useTaskboardI18n } from "../i18n";
-import type { AiChatModel } from "../types";
+import type {
+  AiChatModel,
+  AutoClaimExecutor,
+  AutoClaimSandbox,
+  ProjectAutoClaim,
+} from "../types";
 
 type AutomationStatus = "ACTIVE" | "PAUSED";
 type AutomationQuotaState = "available" | "blocked" | "unknown" | "unavailable";
@@ -29,14 +34,27 @@ interface AutomationState extends AutomationOptions {
   };
 }
 
+/**
+ * One flat draft covering both backends. The caller routes it: `codex-native`
+ * fields go to the Codex app's cron, the rest to the taskboard server.
+ */
+export interface AutomationDraft extends AutomationOptions {
+  executor: AutoClaimExecutor;
+  sandbox: AutoClaimSandbox;
+  networkAccess: boolean;
+}
+
 interface ProjectAutomationMenuProps {
   automation?: Partial<AutomationState>;
+  autoClaim?: ProjectAutoClaim;
+  executor: AutoClaimExecutor;
   models: AiChatModel[];
   pending: boolean;
   error: string | null;
-  unavailableReason: string | null;
+  nativeUnavailableReason: string | null;
+  serverUnavailableReason: string | null;
   onOpen: () => void;
-  onChange: (options: AutomationOptions) => void;
+  onChange: (draft: AutomationDraft) => void;
 }
 
 const EFFORT_LABELS: Record<string, readonly [string, string]> = {
@@ -50,27 +68,57 @@ const EFFORT_LABELS: Record<string, readonly [string, string]> = {
 
 function automationOptions(
   models: AiChatModel[],
+  executor: AutoClaimExecutor,
   automation?: Partial<AutomationState>,
-): AutomationOptions {
+  autoClaim?: ProjectAutoClaim,
+): AutomationDraft {
   const model = models.find((candidate) => candidate.slug === automation?.model) ?? models[0];
   const reasoningEffort = model?.supportedReasoningEfforts.includes(automation?.reasoningEffort ?? "")
     ? automation?.reasoningEffort
     : model?.defaultReasoningEffort;
+  const native = executor === "codex-native";
   return {
-    enabledByUser: automation?.enabledByUser ?? false,
+    executor,
+    enabledByUser: native
+      ? automation?.enabledByUser ?? false
+      : autoClaim?.enabled ?? false,
     quotaAware: automation?.quotaAware ?? false,
-    intervalMinutes: automation?.intervalMinutes ?? 5,
+    intervalMinutes: (native
+      ? automation?.intervalMinutes
+      : autoClaim?.intervalMinutes) as IntervalMinutes ?? 5,
     model: model?.slug ?? "",
     reasoningEffort: reasoningEffort ?? "",
+    sandbox: autoClaim?.sandbox ?? "workspace-write",
+    networkAccess: autoClaim?.networkAccess ?? true,
   };
 }
 
+const EXECUTOR_LABELS: Record<AutoClaimExecutor, readonly [string, string]> = {
+  "codex-native": ["Codex 原生会话", "Codex native session"],
+  codex: ["Codex CLI", "Codex CLI"],
+  "claude-code": ["Claude Code CLI", "Claude Code CLI"],
+};
+
+/** Short form for the trigger and the last-run line, where the row label is absent. */
+const AGENT_SHORT_LABELS: Record<string, readonly [string, string]> = {
+  codex: ["Codex", "Codex"],
+  "claude-code": ["Claude Code", "Claude Code"],
+};
+
+const SANDBOX_LABELS: Record<AutoClaimSandbox, readonly [string, string]> = {
+  "read-only": ["只读（不改文件）", "Read-only"],
+  "workspace-write": ["可改工作目录", "Workspace write"],
+};
+
 export function ProjectAutomationMenu({
   automation,
+  autoClaim,
+  executor,
   models,
   pending,
   error,
-  unavailableReason,
+  nativeUnavailableReason,
+  serverUnavailableReason,
   onOpen,
   onChange,
 }: ProjectAutomationMenuProps) {
@@ -79,29 +127,44 @@ export function ProjectAutomationMenu({
   const menuRef = useRef<HTMLDivElement>(null);
   const wasPendingRef = useRef(pending);
   const [open, setOpen] = useState(false);
-  const [pickerMenu, setPickerMenu] = useState<"interval" | "model" | "reasoning" | null>(null);
+  const [pickerMenu, setPickerMenu] = useState<
+    "executor" | "interval" | "model" | "reasoning" | "sandbox" | null
+  >(null);
   const [position, setPosition] = useState({ left: 0, top: 0, ready: false });
-  const [draft, setDraft] = useState<AutomationOptions>(() => automationOptions(models, automation));
-  const status = automation?.status ?? "PAUSED";
+  const [draft, setDraft] = useState<AutomationDraft>(
+    () => automationOptions(models, executor, automation, autoClaim),
+  );
+  const native = draft.executor === "codex-native";
+  const unavailableReason = native ? nativeUnavailableReason : serverUnavailableReason;
   const quota = automation?.quota;
-  const stateLabel = !automation?.enabledByUser
-    ? text("已暂停", "Paused")
-    : automation.quotaAware && quota?.state === "blocked"
-      ? text("额度暂停", "Paused by quota")
-      : automation.quotaAware && quota?.state === "unavailable"
-        ? text("额度不可用", "Quota unavailable")
-        : automation.quotaAware && (!quota || quota.state === "unknown")
-          ? text("额度未知", "Quota unknown")
-          : status === "ACTIVE"
-            ? text("运行中", "Running")
-            : text("已暂停", "Paused");
+  const nativeStatus = automation?.status ?? "PAUSED";
+  const stateLabel = native
+    ? !automation?.enabledByUser
+      ? text("已暂停", "Paused")
+      : automation.quotaAware && quota?.state === "blocked"
+        ? text("额度暂停", "Paused by quota")
+        : automation.quotaAware && quota?.state === "unavailable"
+          ? text("额度不可用", "Quota unavailable")
+          : automation.quotaAware && (!quota || quota.state === "unknown")
+            ? text("额度未知", "Quota unknown")
+            : nativeStatus === "ACTIVE"
+              ? text("运行中", "Running")
+              : text("已暂停", "Paused")
+    : autoClaim?.running
+      ? text("正在执行", "Working")
+      : draft.enabledByUser
+        ? text("等待下一轮", "Waiting")
+        : text("已暂停", "Paused");
+  const running = native ? nativeStatus === "ACTIVE" : Boolean(autoClaim?.running);
   const selectedModel = models.find((model) => model.slug === draft.model) ?? models[0];
-  const disabled = pending || !selectedModel || Boolean(unavailableReason);
+  const disabled = pending
+    || Boolean(unavailableReason)
+    || (native && !selectedModel);
 
   useEffect(() => {
     if (!open) return;
-    setDraft(automationOptions(models, automation));
-  }, [automation, models, open]);
+    setDraft(automationOptions(models, executor, automation, autoClaim));
+  }, [autoClaim, automation, executor, models, open]);
 
   useEffect(() => {
     if (!open) setPickerMenu(null);
@@ -109,10 +172,10 @@ export function ProjectAutomationMenu({
 
   useEffect(() => {
     if (wasPendingRef.current && !pending) {
-      setDraft(automationOptions(models, automation));
+      setDraft(automationOptions(models, executor, automation, autoClaim));
     }
     wasPendingRef.current = pending;
-  }, [automation, pending]);
+  }, [autoClaim, automation, executor, pending]);
 
   useLayoutEffect(() => {
     if (!open || !triggerRef.current || !menuRef.current) return;
@@ -153,8 +216,8 @@ export function ProjectAutomationMenu({
     };
   }, [open, pickerMenu]);
 
-  const submitChange = (next: AutomationOptions) => {
-    if (disabled) return;
+  const submitChange = (next: AutomationDraft) => {
+    if (pending) return;
     setDraft(next);
     onChange(next);
   };
@@ -169,9 +232,30 @@ export function ProjectAutomationMenu({
     >
       <div className="project-automation-menu-heading">
         <strong>{text("自动认领待办", "Auto-claim tasks")}</strong>
-        <span className={status === "ACTIVE" ? "is-active" : "is-paused"}>
+        <span className={running ? "is-active" : "is-paused"}>
           {stateLabel}
         </span>
+      </div>
+      <div className="project-automation-field">
+        <span>{text("执行器", "Executor")}</span>
+        <TaskPropertyPicker
+          value={draft.executor}
+          options={(["codex-native", "codex", "claude-code"] as AutoClaimExecutor[]).map((value) => ({
+            value,
+            label: text(...EXECUTOR_LABELS[value]),
+            icon: <ProjectIcon color="currentColor" size={14} />,
+          }))}
+          open={pickerMenu === "executor"}
+          disabled={pending}
+          className="project-automation-picker"
+          triggerClassName="project-automation-picker-trigger"
+          ariaLabel={text("执行器", "Executor")}
+          onOpenChange={(open) => setPickerMenu(open ? "executor" : null)}
+          onChange={(value) => submitChange({
+            ...draft,
+            executor: value as AutoClaimExecutor,
+          })}
+        />
       </div>
       <div className="project-automation-switch">
         <span>{text("自动认领开关", "Auto-claim")}</span>
@@ -189,6 +273,7 @@ export function ProjectAutomationMenu({
           <span aria-hidden="true" />
         </button>
       </div>
+      {native && (
       <div className="project-automation-switch">
         <span>{text("根据额度启用/关闭", "Use quota limits")}</span>
         <button
@@ -205,7 +290,8 @@ export function ProjectAutomationMenu({
           <span aria-hidden="true" />
         </button>
       </div>
-      {draft.quotaAware && (
+      )}
+      {native && draft.quotaAware && (
         <div className={`project-automation-quota is-${quota?.state ?? "unknown"}`}>
           {quota?.state === "available" && text("当前额度可用", "Quota is available")}
           {quota?.state === "blocked" && (
@@ -251,7 +337,56 @@ export function ProjectAutomationMenu({
           })}
         />
       </div>
-      {selectedModel && (
+      {!native && (
+        <div className="project-automation-field">
+          <span>{text("权限", "Permission")}</span>
+          <TaskPropertyPicker
+            value={draft.sandbox}
+            options={(["workspace-write", "read-only"] as AutoClaimSandbox[]).map((value) => ({
+              value,
+              label: text(...SANDBOX_LABELS[value]),
+              icon: <LinearIcon name="displayOptions" />,
+            }))}
+            open={pickerMenu === "sandbox"}
+            disabled={pending}
+            className="project-automation-picker"
+            triggerClassName="project-automation-picker-trigger"
+            ariaLabel={text("权限", "Permission")}
+            onOpenChange={(open) => setPickerMenu(open ? "sandbox" : null)}
+            onChange={(value) => submitChange({
+              ...draft,
+              sandbox: value as AutoClaimSandbox,
+            })}
+          />
+        </div>
+      )}
+      {draft.executor === "codex" && (
+        <div className="project-automation-switch">
+          <span>{text("允许联网", "Allow network")}</span>
+          <button
+            type="button"
+            className={`board-setting-switch${draft.networkAccess ? " is-on" : ""}`}
+            role="switch"
+            aria-checked={draft.networkAccess}
+            disabled={disabled}
+            onClick={() => submitChange({
+              ...draft,
+              networkAccess: !draft.networkAccess,
+            })}
+          >
+            <span aria-hidden="true" />
+          </button>
+        </div>
+      )}
+      {draft.executor === "codex" && !draft.networkAccess && (
+        <p className="project-automation-note">
+          {text(
+            "关闭后 Codex 沙箱会连回环也一起挡掉，它将无法认领议题。Codex 没有仅回环选项，开启即为一般联网。",
+            "With this off, the Codex sandbox also blocks loopback, so it cannot claim issues. Codex has no loopback-only option, so on means general network access.",
+          )}
+        </p>
+      )}
+      {native && selectedModel && (
         <>
           <div className="project-automation-field">
             <span>{text("模型", "Model")}</span>
@@ -304,27 +439,60 @@ export function ProjectAutomationMenu({
           </div>
         </>
       )}
+      {!native && autoClaim?.lastIssue && (
+        <p className="project-automation-note">
+          {(() => {
+            const ran = autoClaim.lastAgent
+              ? text(...AGENT_SHORT_LABELS[autoClaim.lastAgent])
+              : null;
+            const who = ran ? `${ran} ` : "";
+            if (autoClaim.lastOutcome === "running") {
+              return text(
+                `${who}正在处理 ${autoClaim.lastIssue}`,
+                `${who}is working on ${autoClaim.lastIssue}`,
+              );
+            }
+            if (autoClaim.lastOutcome === "failed") {
+              return text(
+                `上一轮 ${who}处理 ${autoClaim.lastIssue} 失败：${autoClaim.lastError ?? ""}`,
+                `Last run: ${who}failed on ${autoClaim.lastIssue} — ${autoClaim.lastError ?? ""}`,
+              );
+            }
+            return text(
+              `上一轮 ${who}已完成 ${autoClaim.lastIssue}`,
+              `Last run: ${who}completed ${autoClaim.lastIssue}`,
+            );
+          })()}
+        </p>
+      )}
       {unavailableReason && <p className="project-automation-note">{unavailableReason}</p>}
       {error && error !== unavailableReason && <p className="project-automation-error" role="alert">{error}</p>}
     </div>,
     document.body,
   ) : null;
 
+  // Who is on duty: the agent mid-run when there is one, otherwise the configured
+  // default. Without this the board never says which CLI does the work.
+  const onDutyAgent = running && autoClaim?.lastAgent
+    ? autoClaim.lastAgent
+    : executor === "codex-native" ? null : executor;
+  const onDuty = onDutyAgent ? text(...AGENT_SHORT_LABELS[onDutyAgent]) : null;
+  const triggerLabel = running
+    ? text("自动认领中", "Auto-claiming")
+    : text("自动化", "Automation");
+  const triggerText = onDuty ? `${triggerLabel} · ${onDuty}` : triggerLabel;
+
   return (
     <>
       <button
         ref={triggerRef}
         type="button"
-        className={`project-automation-trigger no-drag ${status === "ACTIVE" ? "is-active" : "is-paused"}`}
-        aria-label={status === "ACTIVE"
-          ? text("自动认领中", "Auto-claiming")
-          : text("自动化", "Automation")}
+        className={`project-automation-trigger no-drag ${running ? "is-active" : "is-paused"}`}
+        aria-label={triggerText}
         aria-busy={pending}
         aria-haspopup="dialog"
         aria-expanded={open}
-        title={status === "ACTIVE"
-          ? text("自动认领中", "Auto-claiming")
-          : text("自动化", "Automation")}
+        title={triggerText}
         onClick={() => {
           if (!open) {
             setPosition((current) => ({ ...current, ready: false }));
@@ -333,10 +501,8 @@ export function ProjectAutomationMenu({
           setOpen((current) => !current);
         }}
       >
-        <TaskboardIcon name={status === "ACTIVE" ? "automationPause" : "automationPlay"} />
-        <span>{status === "ACTIVE"
-          ? text("自动认领中", "Auto-claiming")
-          : text("自动化", "Automation")}</span>
+        <TaskboardIcon name={running ? "automationPause" : "automationPlay"} />
+        <span>{triggerText}</span>
       </button>
       {menu}
     </>

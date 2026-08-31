@@ -1683,6 +1683,46 @@ kbd {
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
+/* Segmented rows for theme and language, laid out like the switch rows above. */
+.board-setting-segmented {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 34px;
+  gap: 12px;
+}
+
+.board-setting-segmented > div {
+  display: inline-flex;
+  overflow: hidden;
+  border: var(--border-hairline) solid color-mix(in srgb, var(--text-tertiary) 30%, transparent);
+  border-radius: 8px;
+}
+
+.board-setting-segment {
+  padding: 4px 9px;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.board-setting-segment + .board-setting-segment {
+  border-left: var(--border-hairline) solid color-mix(in srgb, var(--text-tertiary) 30%, transparent);
+}
+
+.board-setting-segment.is-on {
+  background: var(--accent);
+  color: white;
+}
+
+.board-setting-segment:focus-visible {
+  outline: 0;
+  box-shadow: inset 0 0 0 2px var(--accent-soft);
+}
+
 .clear-filter {
   display: grid;
   place-items: center;
@@ -4051,6 +4091,23 @@ kbd {
   border: 0;
   border-radius: 0;
   background: transparent;
+}
+
+/*
+ * An agent without a bundled logo falls back to its initial. The agent rules
+ * above are written for an image that fills the box, so the filled circle has to
+ * come back or the initial renders white on transparent. Scoped to the agent
+ * case: users already have their own colour.
+ */
+.actor-avatar-agent.actor-avatar-initial {
+  overflow: hidden;
+  border: 2px solid var(--bg);
+  border-radius: 50%;
+  background: #4a6da7;
+}
+
+.actor-avatar-agent.actor-avatar-initial.card-assignee-avatar {
+  border-width: 1px;
 }
 
 .actor-avatar-image {
@@ -9357,6 +9414,12 @@ kbd {
 
 .task-card .actor-avatar-agent-image {
   border-radius: 50%;
+}
+
+/* The task-card agent rule above repaints the box for a logo; keep the initial readable. */
+.task-card .actor-avatar-agent.actor-avatar-initial {
+  padding: 0;
+  background: #4a6da7;
 }
 
 @keyframes task-processing-sheen {

@@ -11,15 +11,19 @@ import { promisify } from "node:util";
 import { WebSocket as WebSocketClient, WebSocketServer } from "ws";
 
 import {
+  AGENT_KINDS,
+  CODEX_AGENT_ACTOR,
   DEFAULT_PROJECT_ID,
   JIRA_PROJECT_ID,
   TASK_STATUSES,
+  agentActorForKind,
   isTaskPriority,
   isTaskStatus,
 } from "../shared/domain.mjs";
 import { resolveCodexExecutable } from "../shared/codex-executable.mjs";
 import { withoutTaskboardLauncherEnvironment } from "../shared/codex-environment.mjs";
 import { AiChatService } from "./ai-chat.mjs";
+import { AutoClaimService } from "./auto-claim.mjs";
 import { resolveAiWorkspace, resolveMappedAiWorkspace } from "./ai-chat-catalog.mjs";
 import { decodeComposerReferenceKey } from "./composer-reference.mjs";
 import { createCloudConfigStore } from "./cloud-config.mjs";
@@ -55,12 +59,6 @@ const INLINE_ATTACHMENT_TYPES = new Set([
 const PROJECT_ID_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
 const TRUSTED_EMBED_ORIGINS = new Set(["app://-"]);
 const TRUSTED_ORIGINS_ENV = "CODEX_TASKBOARD_TRUSTED_ORIGINS";
-const CODEX_AGENT_ACTOR = {
-  type: "agent",
-  id: "codex-agent",
-  name: "Codex Agent",
-  avatarUrl: null,
-};
 const CONTENT_TYPES = new Map([
   [".css", "text/css; charset=utf-8"],
   [".html", "text/html; charset=utf-8"],
@@ -558,7 +556,7 @@ function requestHeader(request, name) {
 
 function actorFromRequest(request) {
   if (request.headers["x-taskboard-client"] === "taskctl") {
-    return CODEX_AGENT_ACTOR;
+    return agentActorForKind(requestHeader(request, "x-taskboard-agent"));
   }
 
   const rawId = requestHeader(request, "x-taskboard-user-id");
@@ -617,11 +615,24 @@ function resolveAssignee(target, actor) {
   return actor;
 }
 
+/** Per-issue override of the project's auto-claim executor; null means follow the project. */
+function parseExecutor(value) {
+  if (value === null || value === undefined) return null;
+  if (!AGENT_KINDS.has(value)) {
+    throw new ApiError(
+      400,
+      "INVALID_FIELD",
+      `'executor' must be null or one of ${[...AGENT_KINDS].join(", ")}`,
+    );
+  }
+  return value;
+}
+
 function parseTaskCreate(body) {
   assertPlainObject(body);
   assertAllowedKeys(body, new Set([
     "projectId", "title", "description", "status", "priority", "labels", "sortOrder", "threadId", "threadBinding",
-    "assigneeTarget", "developmentContext", "startDate", "dueDate", "recurrence",
+    "assigneeTarget", "developmentContext", "startDate", "dueDate", "recurrence", "executor",
   ]));
   const projectId = validateProjectId(body.projectId ?? DEFAULT_PROJECT_ID);
   const task = {
@@ -639,6 +650,7 @@ function parseTaskCreate(body) {
     startDate: parseDueDate(body.startDate ?? null, "startDate"),
     dueDate: parseDueDate(body.dueDate ?? null),
     recurrence: parseRecurrence(body.recurrence ?? null),
+    executor: parseExecutor(body.executor ?? null),
   };
   if (task.recurrence && !task.dueDate) {
     throw new ApiError(400, "INVALID_FIELD", "A recurring issue requires 'dueDate'");
@@ -650,7 +662,7 @@ function parseTaskPatch(body) {
   assertPlainObject(body);
   assertAllowedKeys(body, new Set([
     "version", "projectId", "title", "description", "status", "priority", "labels", "threadId", "threadBinding",
-    "assigneeTarget", "developmentContext", "startDate", "dueDate", "recurrence",
+    "assigneeTarget", "developmentContext", "startDate", "dueDate", "recurrence", "executor",
   ]));
   const version = parseVersion(body.version);
   const threadId = parseThreadId(body.threadId);
@@ -667,6 +679,7 @@ function parseTaskPatch(body) {
   if (body.startDate !== undefined) changes.startDate = parseDueDate(body.startDate, "startDate");
   if (body.dueDate !== undefined) changes.dueDate = parseDueDate(body.dueDate);
   if (body.recurrence !== undefined) changes.recurrence = parseRecurrence(body.recurrence);
+  if (body.executor !== undefined) changes.executor = parseExecutor(body.executor);
   if (changes.recurrence && body.dueDate === null) {
     throw new ApiError(400, "INVALID_FIELD", "A recurring issue requires 'dueDate'");
   }
@@ -881,6 +894,59 @@ function parseTaskTreeQuery(searchParams) {
     throw new ApiError(400, "INVALID_TREE_QUERY", "'depth' must be an integer from 1 to 25");
   }
   return { direction, depth };
+}
+
+const AUTO_CLAIM_INTERVALS = new Set([5, 10, 15, 30, 60]);
+// 'danger-full-access' is absent on purpose: it requires per-turn human
+// confirmation, which an unattended background turn cannot provide.
+const AUTO_CLAIM_SANDBOXES = new Set(["read-only", "workspace-write"]);
+
+function parseAutoClaimSettings(body) {
+  const settings = {};
+  if (Object.hasOwn(body, "enabled")) {
+    if (typeof body.enabled !== "boolean") {
+      throw new ApiError(400, "INVALID_FIELD", "'enabled' must be a boolean");
+    }
+    settings.enabled = body.enabled;
+  }
+  if (Object.hasOwn(body, "agent")) {
+    if (!AGENT_KINDS.has(body.agent)) {
+      throw new ApiError(
+        400,
+        "INVALID_FIELD",
+        `'agent' must be one of ${[...AGENT_KINDS].join(", ")}`,
+      );
+    }
+    settings.agent = body.agent;
+  }
+  if (Object.hasOwn(body, "intervalMinutes")) {
+    if (!AUTO_CLAIM_INTERVALS.has(body.intervalMinutes)) {
+      throw new ApiError(400, "INVALID_FIELD", "'intervalMinutes' must be 5, 10, 15, 30, or 60");
+    }
+    settings.intervalMinutes = body.intervalMinutes;
+  }
+  if (Object.hasOwn(body, "sandbox")) {
+    if (!AUTO_CLAIM_SANDBOXES.has(body.sandbox)) {
+      throw new ApiError(400, "INVALID_FIELD", "'sandbox' must be read-only or workspace-write");
+    }
+    settings.sandbox = body.sandbox;
+  }
+  if (Object.hasOwn(body, "networkAccess")) {
+    if (typeof body.networkAccess !== "boolean") {
+      throw new ApiError(400, "INVALID_FIELD", "'networkAccess' must be a boolean");
+    }
+    settings.networkAccess = body.networkAccess;
+  }
+  if (Object.hasOwn(body, "model")) {
+    settings.model = stringField(body.model, "model", { nullable: true, maxLength: 256 });
+  }
+  if (Object.hasOwn(body, "reasoningEffort")) {
+    settings.reasoningEffort = stringField(body.reasoningEffort, "reasoningEffort", {
+      nullable: true,
+      maxLength: 100,
+    });
+  }
+  return settings;
 }
 
 function parseAiSandbox(value) {
@@ -1846,6 +1912,10 @@ export function createTaskboardServer(options = {}) {
     processEnv: codexProcessEnvironment,
     workspacePath: PROJECT_ROOT,
   });
+  const autoClaim = new AutoClaimService({
+    database,
+    processEnv: codexProcessEnvironment,
+  });
   const aiEventResponses = new Set();
   const codexSessionSearches = new Map();
   const codexSessionStateCache = new Map();
@@ -2257,6 +2327,36 @@ export function createTaskboardServer(options = {}) {
         const connection = await jira.sync({ force: true });
         events.emit("project.labels.updated", { project: database.getProject(JIRA_PROJECT_ID) });
         return sendJson(response, 200, { connection });
+      }
+
+      const autoClaimRoute = pathname.match(/^\/api\/local\/auto-claim\/([^/]+)$/);
+      if (autoClaimRoute) {
+        const projectId = decodeRouteSegment(autoClaimRoute[1], "project id");
+        assertNoQuery(url.searchParams, `${request.method} /api/local/auto-claim/:projectId`);
+        if (request.method === "GET") {
+          await assertEmptyRequestBody(request, "GET /api/local/auto-claim/:projectId");
+          if (!database.getProject(projectId)) {
+            throw new ApiError(404, "PROJECT_NOT_FOUND", `Project '${projectId}' does not exist`);
+          }
+          return sendJson(response, 200, { autoClaim: autoClaim.get(projectId) });
+        }
+        if (request.method === "PUT") {
+          const body = await readJson(request);
+          assertPlainObject(body);
+          assertAllowedKeys(body, new Set([
+            "enabled",
+            "agent",
+            "intervalMinutes",
+            "sandbox",
+            "networkAccess",
+            "model",
+            "reasoningEffort",
+          ]));
+          return sendJson(response, 200, {
+            autoClaim: autoClaim.save(projectId, parseAutoClaimSettings(body)),
+          });
+        }
+        return methodNotAllowed(response, ["GET", "PUT"]);
       }
 
       const projectMappingRoute = pathname.match(/^\/api\/local\/project-mappings\/([^/]+)$/);
@@ -3396,6 +3496,7 @@ export function createTaskboardServer(options = {}) {
       aiEventResponses.clear();
       await aiChat.close();
       await projectSummary.close();
+      await autoClaim.close();
       await serverClosed;
       listening = false;
       database.close();

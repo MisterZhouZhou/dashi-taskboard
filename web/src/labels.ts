@@ -3,7 +3,6 @@ import type { TaskboardLanguage } from "./i18n";
 export const DEFAULT_LABELS = [
   { name: "缺陷", color: "#eb5757" },
   { name: "特性", color: "#bb87fc" },
-  { name: "for-claude", color: "#5b8cff" },
   { name: "hold", color: "#d99b25" },
   { name: "改进", color: "#4ea7fc" },
   { name: "phase-1", color: "#1d4ed8" },

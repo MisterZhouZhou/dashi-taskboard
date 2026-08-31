@@ -27,6 +27,7 @@ import {
   getCodexThreadProgress,
   getHostRuntime,
   getJiraConnection,
+  getProjectAutoClaim,
   getTaskboardRevision,
   getTaskboardMetadata,
   listArchivedTasks,
@@ -40,6 +41,7 @@ import {
   resolveTaskboardUrl,
   resolveTaskboardWebSocketUrl,
   restoreTask as restoreTaskRequest,
+  saveProjectAutoClaim,
   setApiText,
   setCurrentUserActor,
   syncJiraConnection,
@@ -75,7 +77,7 @@ import {
   RefreshIcon,
   RelationIcon,
 } from "./components/SemanticIcons";
-import { ProjectAutomationMenu } from "./components/ProjectAutomationMenu";
+import { ProjectAutomationMenu, type AutomationDraft } from "./components/ProjectAutomationMenu";
 import { TaskboardIcon } from "./components/TaskboardIcon";
 import { TaskContextMenu } from "./components/TaskContextMenu";
 import { TaskDetail } from "./components/TaskDetail";
@@ -97,6 +99,7 @@ import {
   resolveTaskboardLanguage,
   taskStatusLabel,
   TaskboardLanguageProvider,
+  type TaskboardLanguage,
 } from "./i18n";
 import {
   MAIN_STATUSES,
@@ -121,6 +124,7 @@ import {
   type ActorIdentity,
   type AiChatModel,
   type AiChatThread,
+  type AutoClaimExecutor,
   type CodexProjectIdentity,
   type CodexThreadBinding,
   type DevelopmentScan,
@@ -129,6 +133,7 @@ import {
   type IssueRelationType,
   type JiraConnection,
   type Project,
+  type ProjectAutoClaim,
   type Task,
   type TaskboardMetadata,
   type TaskDraft,
@@ -140,6 +145,7 @@ import { createRevisionPoller, createRevisionWebSocketClient, getRevisionPolling
 
 type ConnectionState = "connecting" | "live" | "reconnecting";
 type Theme = "light" | "dark";
+type ThemeMode = "auto" | Theme;
 type BoardView = "readme" | "dashboard" | "issues" | "list" | "gantt";
 type DetailSourceScroll =
   | { projectId: string; view: "issues"; status: TaskStatus; scrollTop: number }
@@ -228,6 +234,8 @@ interface ProjectAutomationRecord {
   intervalMinutes: AutomationIntervalMinutes;
   model: string;
   reasoningEffort: string;
+  /** Remembered UI choice; the schedule itself lives in whichever backend it names. */
+  executor?: AutoClaimExecutor;
 }
 
 type ProjectAutomationOptions = Pick<
@@ -302,6 +310,9 @@ const RECENT_PROJECT_IDS_KEY = "taskboard.recentProjectIds.v1";
 const PROJECT_VIEW_KEY_PREFIX = "taskboard.project-view.v1.";
 const DEVICE_WORKSPACE_PATHS_KEY = "taskboard.deviceWorkspacePaths.v1";
 const PROJECT_CODEX_IDENTITIES_KEY = "taskboard.projectCodexIdentities.v1";
+const PROJECT_AUTOCLAIM_EXECUTORS_KEY = "taskboard.projectAutoClaimExecutors.v1";
+const THEME_MODE_KEY = "taskboard.themeMode.v1";
+const LANGUAGE_KEY = "taskboard.language.v1";
 const PROJECT_AUTOMATIONS_KEY = "taskboard.projectAutomations.v1";
 const PROJECT_BOARD_DISPLAY_SETTINGS_KEY = "taskboard.project-board-display-settings.v3";
 const ISSUE_READ_KEY_PREFIX = "taskboard.issue-read.v1";
@@ -367,7 +378,30 @@ function isTheme(value: unknown): value is Theme {
   return value === "light" || value === "dark";
 }
 
+function isThemeMode(value: unknown): value is ThemeMode {
+  return value === "auto" || value === "light" || value === "dark";
+}
+
+/** `auto` means keep following the OS; an explicit choice stops that. */
+function readThemeMode(): ThemeMode {
+  const fromQuery = new URL(document.baseURI).searchParams.get("theme");
+  if (isThemeMode(fromQuery)) return fromQuery;
+  const stored = taskboardStorage.getItem(THEME_MODE_KEY);
+  return isThemeMode(stored) ? stored : "auto";
+}
+
+function readStoredLanguage(): TaskboardLanguage | null {
+  const stored = taskboardStorage.getItem(LANGUAGE_KEY);
+  return stored === "zh" || stored === "en" ? stored : null;
+}
+
+function systemTheme(): Theme {
+  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+
 function getInitialTheme(): Theme {
+  const mode = readThemeMode();
+  if (mode !== "auto") return mode;
   const query = new URL(document.baseURI).searchParams;
   const host = query.get("host");
   if (
@@ -379,7 +413,7 @@ function getInitialTheme(): Theme {
     const stored = taskboardStorage.getItem("taskboard.theme");
     if (isTheme(stored)) return stored;
   }
-  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  return systemTheme();
 }
 
 function readDeviceWorkspacePaths(): Record<string, string> {
@@ -389,6 +423,20 @@ function readDeviceWorkspacePaths(): Record<string, string> {
     return Object.fromEntries(Object.entries(value).filter((entry): entry is [string, string] => (
       typeof entry[1] === "string" && entry[1].trim().length > 0
     )));
+  } catch {
+    return {};
+  }
+}
+
+function readProjectAutoClaimExecutors(): Record<string, AutoClaimExecutor> {
+  try {
+    const value = JSON.parse(taskboardStorage.getItem(PROJECT_AUTOCLAIM_EXECUTORS_KEY) ?? "{}");
+    if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+    return Object.fromEntries(
+      Object.entries(value).filter((entry): entry is [string, AutoClaimExecutor] => (
+        entry[1] === "codex-native" || entry[1] === "codex" || entry[1] === "claude-code"
+      )),
+    );
   } catch {
     return {};
   }
@@ -548,6 +596,7 @@ function taskToDraft(task: Task): TaskDraft {
     startDate: task.startDate,
     dueDate: task.dueDate,
     recurrence: task.recurrence,
+    executor: task.executor,
   };
 }
 
@@ -685,9 +734,14 @@ export function App() {
   const embedded = host === "codex" || host === "workbuddy" || host === "deepseek-harness";
   const undoShortcut = navigator.userAgent.includes("Macintosh") ? "⌘Z" : "Ctrl+Z";
   const [theme, setTheme] = useState<Theme>(getInitialTheme);
+  const [themeMode, setThemeModeState] = useState<ThemeMode>(readThemeMode);
+  const [storedLanguage, setStoredLanguageState] = useState<TaskboardLanguage | null>(
+    readStoredLanguage,
+  );
   const [hostContext, setHostContext] = useState<HostContext | null>(null);
+  // Chinese is the product default; the browser's own locale is not consulted.
   const language = resolveTaskboardLanguage(
-    hostContext?.language ?? query.get("lang") ?? navigator.language,
+    hostContext?.language ?? query.get("lang") ?? storedLanguage ?? "zh",
   );
   const { locale, text } = getTaskboardI18n(language);
   const [embeddedFrameChallenge, setEmbeddedFrameChallengeState] = useState("");
@@ -782,6 +836,8 @@ export function App() {
   const [deviceWorkspacePaths, setDeviceWorkspacePaths] = useState(readDeviceWorkspacePaths);
   const [projectCodexIdentities, setProjectCodexIdentities] = useState(readProjectCodexIdentities);
   const [projectAutomations, setProjectAutomations] = useState(readProjectAutomations);
+  const [projectAutoClaims, setProjectAutoClaims] = useState<Record<string, ProjectAutoClaim>>({});
+  const [autoClaimExecutors, setAutoClaimExecutors] = useState(readProjectAutoClaimExecutors);
   const [automationPending, setAutomationPending] = useState(false);
   const [automationError, setAutomationError] = useState<string | null>(null);
   const [automationCatalog, setAutomationCatalog] = useState<{
@@ -927,6 +983,32 @@ export function App() {
     ? undefined
     : deviceWorkspacePaths[selectedProjectId];
   const selectedProjectAutomation = projectAutomations[selectedProjectId];
+  const selectedProjectAutoClaim = projectAutoClaims[selectedProjectId];
+  const selectedExecutor: AutoClaimExecutor = autoClaimExecutors[selectedProjectId]
+    ?? (selectedProjectAutoClaim?.enabled
+      ? selectedProjectAutoClaim.agent
+      : selectedProjectAutomation?.enabledByUser
+        ? "codex-native"
+        : embedded ? "codex-native" : "codex");
+  const autoClaimRefreshKey = selectedProjectAutoClaim?.running === true;
+  useEffect(() => {
+    if (!selectedProject || isAllProjects) return;
+    const controller = new AbortController();
+    const projectId = selectedProject.id;
+    const load = () => {
+      void getProjectAutoClaim(projectId, controller.signal).then(
+        (autoClaim) => setProjectAutoClaims((current) => ({ ...current, [projectId]: autoClaim })),
+        () => {},
+      );
+    };
+    load();
+    // A turn takes minutes, so poll only while one is actually in flight.
+    const interval = autoClaimRefreshKey ? window.setInterval(load, 10_000) : null;
+    return () => {
+      controller.abort();
+      if (interval !== null) window.clearInterval(interval);
+    };
+  }, [autoClaimRefreshKey, isAllProjects, selectedProject?.id]);
   const automationProjectContext = useMemo<Partial<CodexProjectIdentity> & {
     unavailableReason: string | null;
   }>(() => {
@@ -1468,6 +1550,55 @@ export function App() {
     drainQueuedAutomationSaves,
   ]);
 
+  /**
+   * Exactly one backend owns a project's schedule. Whichever the executor names
+   * gets the user's toggle; the other is switched off in the same save, so two
+   * schedulers can never chase the same issues.
+   */
+  const saveAutomationDraft = useCallback(async (draft: AutomationDraft) => {
+    const projectId = selectedProjectId;
+    if (!projectId || isAllProjects) return;
+    const agent = draft.executor === "codex-native" ? null : draft.executor;
+    const native = agent === null;
+
+    setAutoClaimExecutors((current) => {
+      const next = { ...current, [projectId]: draft.executor };
+      taskboardStorage.setItem(PROJECT_AUTOCLAIM_EXECUTORS_KEY, JSON.stringify(next));
+      return next;
+    });
+
+    setAutomationError(null);
+    try {
+      const autoClaim = await saveProjectAutoClaim(projectId, {
+        enabled: agent !== null && draft.enabledByUser,
+        ...(agent === null ? {} : { agent }),
+        intervalMinutes: draft.intervalMinutes,
+        sandbox: draft.sandbox,
+        networkAccess: draft.networkAccess,
+      });
+      setProjectAutoClaims((current) => ({ ...current, [projectId]: autoClaim }));
+    } catch (error) {
+      setAutomationError(error instanceof Error ? error.message : String(error));
+      return;
+    }
+
+    if (embedded && automationRequestContext) {
+      saveProjectAutomation({
+        enabledByUser: native && draft.enabledByUser,
+        quotaAware: draft.quotaAware,
+        intervalMinutes: draft.intervalMinutes,
+        model: draft.model,
+        reasoningEffort: draft.reasoningEffort,
+      });
+    }
+  }, [
+    automationRequestContext,
+    embedded,
+    isAllProjects,
+    saveProjectAutomation,
+    selectedProjectId,
+  ]);
+
   function openTaskDetail(task: Pick<Task, "identifier" | "projectId">) {
     const fullTask = tasksRef.current.find((candidate) => candidate.identifier === task.identifier);
     if (fullTask) markTaskRead(fullTask);
@@ -1580,12 +1711,24 @@ export function App() {
 
   useEffect(() => {
     if (embedded && window.parent !== window) return;
-    const systemTheme = window.matchMedia("(prefers-color-scheme: dark)");
-    const syncTheme = () => setTheme(systemTheme.matches ? "dark" : "light");
+    if (themeMode !== "auto") return;
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    const syncTheme = () => setTheme(media.matches ? "dark" : "light");
     syncTheme();
-    systemTheme.addEventListener("change", syncTheme);
-    return () => systemTheme.removeEventListener("change", syncTheme);
-  }, [embedded]);
+    media.addEventListener("change", syncTheme);
+    return () => media.removeEventListener("change", syncTheme);
+  }, [embedded, themeMode]);
+
+  const setThemeMode = useCallback((mode: ThemeMode) => {
+    setThemeModeState(mode);
+    taskboardStorage.setItem(THEME_MODE_KEY, mode);
+    setTheme(mode === "auto" ? systemTheme() : mode);
+  }, []);
+
+  const setLanguageChoice = useCallback((next: TaskboardLanguage) => {
+    setStoredLanguageState(next);
+    taskboardStorage.setItem(LANGUAGE_KEY, next);
+  }, []);
 
   useEffect(() => {
     if (selectedProjectId) {
@@ -3410,12 +3553,17 @@ export function App() {
             {selectedProject && (
               <ProjectAutomationMenu
                 automation={selectedProjectAutomation}
+                autoClaim={selectedProjectAutoClaim}
+                executor={selectedExecutor}
                 models={automationModels}
                 pending={automationPending || automationCatalogLoading}
                 error={automationCatalogError ?? automationError}
-                unavailableReason={automationProjectContext.unavailableReason}
+                nativeUnavailableReason={automationProjectContext.unavailableReason}
+                serverUnavailableReason={selectedProject.workspacePath
+                  ? null
+                  : text("请先为该项目设置工作目录", "Set a workspace path for this project first")}
                 onOpen={() => void reconcileProjectAutomation()}
-                onChange={(options) => void saveProjectAutomation(options)}
+                onChange={(draft) => void saveAutomationDraft(draft)}
               />
             )}
             {isJiraProject && (
@@ -3552,6 +3700,9 @@ export function App() {
             {boardView === "issues" && (isAllProjects || selectedProject) && (
               <BoardCardDisplayMenu
                 settings={boardDisplaySettings}
+                themeMode={themeMode}
+                onThemeModeChange={setThemeMode}
+                onLanguageChange={setLanguageChoice}
                 onChange={updateProjectBoardDisplaySettings}
                 onReset={resetProjectBoardDisplaySettings}
               />

@@ -100,11 +100,15 @@ test("global tasks open a projectless conversation", () => {
 });
 
 test("the project navigation automation menu owns the icon, fields, and accessible popover", () => {
-  assert.match(menuSource, /status === "ACTIVE" \? "automationPause" : "automationPlay"/);
+  assert.match(menuSource, /running \? "automationPause" : "automationPlay"/);
   assert.doesNotMatch(menuSource, /statusStarted|statusTodo/);
   assert.match(menuSource, /aria-busy=\{pending/);
   assert.match(menuSource, /自动认领/);
-  assert.match(menuSource, /aria-label=\{status === "ACTIVE"\s*\? text\("自动认领中", "Auto-claiming"\)\s*: text\("自动化", "Automation"\)\}/);
+  assert.match(
+    menuSource,
+    /const triggerLabel = running\s*\? text\("自动认领中", "Auto-claiming"\)\s*: text\("自动化", "Automation"\)/,
+  );
+  assert.match(menuSource, /aria-label=\{triggerText\}/);
   assert.doesNotMatch(menuSource, /已开启自动认领|自动认领未开启/);
   assert.match(menuSource, /自动认领开关/);
   assert.match(menuSource, /5, 10, 15, 30, 60/);
@@ -145,8 +149,11 @@ test("the automation menu reuses the board switches and keeps form focus chrome 
 
 test("unavailable automation state has one notice, clears stale errors, and cannot change", () => {
   assert.match(menuSource, /error && error !== unavailableReason/);
-  assert.match(menuSource, /const disabled = pending \|\| !selectedModel \|\| Boolean\(unavailableReason\)/);
-  assert.equal(menuSource.match(/disabled=\{disabled\}/g)?.length, 5);
+  assert.match(
+    menuSource,
+    /const disabled = pending\s*\|\| Boolean\(unavailableReason\)\s*\|\| \(native && !selectedModel\)/,
+  );
+  assert.equal(menuSource.match(/disabled=\{disabled\}/g)?.length, 6);
   const reconcileSource = appSource.slice(
     appSource.indexOf("const reconcileProjectAutomation"),
     appSource.indexOf("const saveProjectAutomation"),
@@ -159,9 +166,12 @@ test("unavailable automation state has one notice, clears stale errors, and cann
 });
 
 test("automation changes submit immediately with model-specific effort normalization", () => {
-  assert.match(menuSource, /onChange: \(options: AutomationOptions\) => void/);
-  assert.match(menuSource, /const disabled = pending \|\| !selectedModel \|\| Boolean\(unavailableReason\)/);
-  assert.match(menuSource, /const submitChange = \(next: AutomationOptions\) => \{[\s\S]*?setDraft\(next\);[\s\S]*?onChange\(next\);[\s\S]*?\}/);
+  assert.match(menuSource, /onChange: \(draft: AutomationDraft\) => void/);
+  assert.match(
+    menuSource,
+    /const disabled = pending\s*\|\| Boolean\(unavailableReason\)\s*\|\| \(native && !selectedModel\)/,
+  );
+  assert.match(menuSource, /const submitChange = \(next: AutomationDraft\) => \{[\s\S]*?setDraft\(next\);[\s\S]*?onChange\(next\);[\s\S]*?\}/);
   assert.match(menuSource, /const model = models\.find\(\(candidate\) => candidate\.slug === value\)/);
   assert.match(menuSource, /model\.supportedReasoningEfforts\.includes\(draft\.reasoningEffort\)/);
   assert.match(menuSource, /selectedModel\.supportedReasoningEfforts\.map/);
@@ -181,7 +191,7 @@ test("pending completion reconciles the optimistic draft to confirmed host state
   assert.match(menuSource, /const wasPendingRef = useRef\(pending\)/);
   assert.match(
     menuSource,
-    /if \(wasPendingRef\.current && !pending\) \{\s*setDraft\(automationOptions\(models, automation\)\);\s*\}/,
+    /if \(wasPendingRef\.current && !pending\) \{\s*setDraft\(automationOptions\(models, executor, automation, autoClaim\)\);\s*\}/,
   );
   assert.match(menuSource, /wasPendingRef\.current = pending/);
   assert.match(menuSource, /disabled=\{disabled\}/);

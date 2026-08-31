@@ -30,6 +30,7 @@ import {
 import { TASK_PRIORITIES, TASK_STATUSES } from "../types";
 import type {
   ActorIdentity,
+  AgentKind,
   Attachment,
   Comment,
   CodexThreadBinding,
@@ -411,7 +412,7 @@ export function TaskDetail({
   );
   const [editingDescription, setEditingDescription] = useState(false);
   const [propertyMenu, setPropertyMenu] = useState<
-    "status" | "priority" | "assignee" | "labels" | "development" | "recurrence" | null
+    "status" | "priority" | "assignee" | "labels" | "development" | "recurrence" | "executor" | null
   >(null);
   const [savingProperty, setSavingProperty] = useState<string | null>(null);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
@@ -1724,6 +1725,39 @@ export function TaskDetail({
                 ariaLabel={text("优先级", "Priority")}
                 onOpenChange={(open) => setPropertyMenu(open ? "priority" : null)}
                 onChange={(priority) => void saveTask({ priority }, "priority")}
+              />
+            </div>
+            <div className="detail-property-row">
+              <span className="detail-property-label">{text("执行器", "Executor")}</span>
+              <TaskPropertyPicker
+                value={currentTask.executor ?? "project-default"}
+                options={[
+                  {
+                    value: "project-default",
+                    label: text("跟随项目设置", "Follow project"),
+                    icon: <ProjectIcon color="currentColor" size={14} />,
+                  },
+                  {
+                    value: "codex",
+                    label: "Codex CLI",
+                    icon: <ProjectIcon color="currentColor" size={14} />,
+                  },
+                  {
+                    value: "claude-code",
+                    label: "Claude Code CLI",
+                    icon: <ProjectIcon color="currentColor" size={14} />,
+                  },
+                ]}
+                open={propertyMenu === "executor"}
+                disabled={savingProperty === "executor"}
+                className="detail-property-picker"
+                triggerClassName="detail-property-trigger"
+                ariaLabel={text("执行器", "Executor")}
+                onOpenChange={(open) => setPropertyMenu(open ? "executor" : null)}
+                onChange={(value) => void saveTask(
+                  { executor: value === "project-default" ? null : (value as AgentKind) },
+                  "executor",
+                )}
               />
             </div>
             <div className="detail-property-row assignee-property">

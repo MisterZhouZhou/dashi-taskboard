@@ -38,9 +38,9 @@ test("issue details mirror Linear parent, sub-issue, dependency, and related sec
   assert.match(detailSource, /<IssueSubIssues/);
   assert.match(detailSource, /<IssueRelationSidebar/);
   assert.match(relationsSource, /\{text\("子议题", "Sub-issues"\)\}/);
-  assert.match(relationsSource, /chineseLabel: "阻塞于", englishLabel: "Blocked by"/);
-  assert.match(relationsSource, /chineseLabel: "阻塞", englishLabel: "Blocks"/);
-  assert.match(relationsSource, /chineseLabel: "相关议题", englishLabel: "Related issues"/);
+  assert.match(relationsSource, /chineseLabel: "阻塞于",\s+englishLabel: "Blocked by"/);
+  assert.match(relationsSource, /chineseLabel: "阻塞",\s+englishLabel: "Blocks"/);
+  assert.match(relationsSource, /chineseLabel: "相关议题",\s+englishLabel: "Related issues"/);
   assert.match(relationsSource, /placeholder=\{text\("搜索议题…", "Search issues…"\)\}/);
   assert.match(relationsSource, /role="combobox"/);
   assert.match(relationsSource, /role="listbox"/);

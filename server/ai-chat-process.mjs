@@ -340,12 +340,14 @@ export function spawnCodexTurn({
   args,
   prompt,
   env,
+  cwd,
   onRawEvent,
   maxLineBytes = MAX_CODEX_JSONL_LINE_BYTES,
 }) {
   const child = spawn(process.execPath, [TURN_OWNER_PATH, executable, JSON.stringify(args)], {
     detached: true,
     env: withoutTaskboardLauncherEnvironment(env),
+    ...(cwd === undefined ? {} : { cwd }),
     stdio: ["pipe", "pipe", "pipe", "pipe"],
     windowsHide: true,
   });

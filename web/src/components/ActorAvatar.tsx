@@ -7,13 +7,17 @@ export function ActorAvatar({
   actor: ActorIdentity;
   className?: string;
 }) {
+  const isCodexAgent = actor.type === "agent" && actor.id === "codex-agent";
+  const showsImage = isCodexAgent || Boolean(actor.avatarUrl);
   return (
     <span
-      className={`actor-avatar actor-avatar-${actor.type}${className ? ` ${className}` : ""}`}
+      className={`actor-avatar actor-avatar-${actor.type}${
+        showsImage ? "" : " actor-avatar-initial"
+      }${className ? ` ${className}` : ""}`}
       aria-hidden="true"
       title={actor.name}
     >
-      {actor.type === "agent" ? (
+      {isCodexAgent ? (
         <img
           className="actor-avatar-image actor-avatar-agent-image"
           src="codex-agent-logo.png"

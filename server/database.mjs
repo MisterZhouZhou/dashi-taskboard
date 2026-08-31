@@ -257,6 +257,7 @@ function taskFromRow(row) {
     developmentContext,
     startDate: row.start_date,
     dueDate: row.due_date,
+    executor: row.executor ?? null,
     recurrence: row.recurrence_interval && row.recurrence_unit
       ? { interval: row.recurrence_interval, unit: row.recurrence_unit }
       : null,
@@ -362,6 +363,25 @@ function projectSummaryFromRow(row) {
     generatedAt: row.generated_at,
     attemptedAt: row.attempted_at,
     error: row.error,
+  };
+}
+
+function projectAutoClaimFromRow(row) {
+  return {
+    projectId: row.project_id,
+    enabled: row.enabled === 1,
+    agent: row.agent,
+    intervalMinutes: row.interval_minutes,
+    sandbox: row.sandbox,
+    networkAccess: row.network_access === 1,
+    model: row.model,
+    reasoningEffort: row.reasoning_effort,
+    lastStartedAt: row.last_started_at,
+    lastFinishedAt: row.last_finished_at,
+    lastIssue: row.last_issue,
+    lastAgent: row.last_agent,
+    lastOutcome: row.last_outcome,
+    lastError: row.last_error,
   };
 }
 
@@ -495,6 +515,7 @@ export class TaskboardDatabase {
         worktree_branch TEXT,
         start_date TEXT,
         due_date TEXT,
+        executor TEXT,
         recurrence_interval INTEGER,
         recurrence_unit TEXT,
         external_source TEXT,
@@ -592,6 +613,23 @@ export class TaskboardDatabase {
         error TEXT
       );
 
+      CREATE TABLE IF NOT EXISTS project_auto_claim (
+        project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+        enabled INTEGER NOT NULL DEFAULT 0,
+        agent TEXT NOT NULL DEFAULT 'codex',
+        interval_minutes INTEGER NOT NULL DEFAULT 5,
+        sandbox TEXT NOT NULL DEFAULT 'workspace-write',
+        network_access INTEGER NOT NULL DEFAULT 1,
+        model TEXT,
+        reasoning_effort TEXT,
+        last_started_at TEXT,
+        last_finished_at TEXT,
+        last_issue TEXT,
+        last_agent TEXT,
+        last_outcome TEXT,
+        last_error TEXT
+      );
+
       CREATE TABLE IF NOT EXISTS ai_chat_threads (
         id TEXT PRIMARY KEY,
         title TEXT NOT NULL,
@@ -654,6 +692,16 @@ export class TaskboardDatabase {
       this.database.exec("ALTER TABLE projects ADD COLUMN workspace_path TEXT");
     }
 
+    const autoClaimColumns = this.database.prepare("PRAGMA table_info(project_auto_claim)").all();
+    if (!autoClaimColumns.some((column) => column.name === "network_access")) {
+      this.database.exec(
+        "ALTER TABLE project_auto_claim ADD COLUMN network_access INTEGER NOT NULL DEFAULT 1",
+      );
+    }
+    if (!autoClaimColumns.some((column) => column.name === "last_agent")) {
+      this.database.exec("ALTER TABLE project_auto_claim ADD COLUMN last_agent TEXT");
+    }
+
     const taskColumns = this.database.prepare("PRAGMA table_info(tasks)").all();
     const hasWorkflowId = taskColumns.some((column) => column.name === "workflow_id");
     if (hasWorkflowId) {
@@ -693,6 +741,9 @@ export class TaskboardDatabase {
     }
     if (!taskColumns.some((column) => column.name === "due_date")) {
       this.database.exec("ALTER TABLE tasks ADD COLUMN due_date TEXT");
+    }
+    if (!taskColumns.some((column) => column.name === "executor")) {
+      this.database.exec("ALTER TABLE tasks ADD COLUMN executor TEXT");
     }
     if (!taskColumns.some((column) => column.name === "start_date")) {
       this.database.exec("ALTER TABLE tasks ADD COLUMN start_date TEXT");
@@ -1476,6 +1527,90 @@ export class TaskboardDatabase {
     return this.getProjectSummary(projectId);
   }
 
+  getProjectAutoClaim(projectId) {
+    const row = this.database.prepare(`
+      SELECT project_id, enabled, agent, interval_minutes, sandbox, network_access, model, reasoning_effort,
+             last_started_at, last_finished_at, last_issue, last_agent, last_outcome, last_error
+      FROM project_auto_claim
+      WHERE project_id = ?
+    `).get(projectId);
+    return row ? projectAutoClaimFromRow(row) : {
+      projectId,
+      enabled: false,
+      agent: "codex",
+      intervalMinutes: 5,
+      sandbox: "workspace-write",
+      networkAccess: true,
+      model: null,
+      reasoningEffort: null,
+      lastStartedAt: null,
+      lastFinishedAt: null,
+      lastIssue: null,
+      lastAgent: null,
+      lastOutcome: null,
+      lastError: null,
+    };
+  }
+
+  listProjectAutoClaims() {
+    return this.database.prepare(`
+      SELECT project_id, enabled, agent, interval_minutes, sandbox, network_access, model, reasoning_effort,
+             last_started_at, last_finished_at, last_issue, last_agent, last_outcome, last_error
+      FROM project_auto_claim
+      ORDER BY project_id
+    `).all().map(projectAutoClaimFromRow);
+  }
+
+  saveProjectAutoClaim(projectId, settings) {
+    if (!this.database.prepare("SELECT 1 FROM projects WHERE id = ?").get(projectId)) {
+      throw new ApiError(404, "PROJECT_NOT_FOUND", `Project '${projectId}' does not exist`);
+    }
+    const current = this.getProjectAutoClaim(projectId);
+    const next = { ...current, ...settings };
+    this.database.prepare(`
+      INSERT INTO project_auto_claim (
+        project_id, enabled, agent, interval_minutes, sandbox, network_access, model, reasoning_effort
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(project_id) DO UPDATE SET
+        enabled = excluded.enabled,
+        agent = excluded.agent,
+        interval_minutes = excluded.interval_minutes,
+        sandbox = excluded.sandbox,
+        network_access = excluded.network_access,
+        model = excluded.model,
+        reasoning_effort = excluded.reasoning_effort
+    `).run(
+      projectId,
+      next.enabled ? 1 : 0,
+      next.agent,
+      next.intervalMinutes,
+      next.sandbox,
+      next.networkAccess ? 1 : 0,
+      next.model,
+      next.reasoningEffort,
+    );
+    return this.getProjectAutoClaim(projectId);
+  }
+
+  recordProjectAutoClaimStart(projectId, issueIdentifier, agent) {
+    this.database.prepare(`
+      UPDATE project_auto_claim
+      SET last_started_at = ?, last_issue = ?, last_agent = ?,
+          last_outcome = 'running', last_error = NULL
+      WHERE project_id = ?
+    `).run(now(), issueIdentifier, agent, projectId);
+    return this.getProjectAutoClaim(projectId);
+  }
+
+  recordProjectAutoClaimFinish(projectId, outcome, error = null) {
+    this.database.prepare(`
+      UPDATE project_auto_claim
+      SET last_finished_at = ?, last_outcome = ?, last_error = ?
+      WHERE project_id = ?
+    `).run(now(), outcome, error, projectId);
+    return this.getProjectAutoClaim(projectId);
+  }
+
   getProjectReadme(projectId) {
     if (!this.database.prepare("SELECT 1 FROM projects WHERE id = ?").get(projectId)) {
       throw new ApiError(404, "PROJECT_NOT_FOUND", `Project '${projectId}' does not exist`);
@@ -2013,9 +2148,9 @@ export class TaskboardDatabase {
           creator_type, creator_id, creator_name, creator_avatar_url,
           assignee_type, assignee_id, assignee_name, assignee_avatar_url,
           git_branch, worktree_path, worktree_branch,
-          start_date, due_date, recurrence_interval, recurrence_unit,
+          start_date, due_date, recurrence_interval, recurrence_unit, executor,
           archived_at, version, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 1, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 1, ?, ?)
       `).run(
         id,
         identifier,
@@ -2042,6 +2177,7 @@ export class TaskboardDatabase {
         input.dueDate,
         input.recurrence?.interval ?? null,
         input.recurrence?.unit ?? null,
+        input.executor ?? null,
         timestamp,
         timestamp,
       );
@@ -2101,6 +2237,7 @@ export class TaskboardDatabase {
       labels: "labels",
       startDate: "start_date",
       dueDate: "due_date",
+      executor: "executor",
     };
     const assignments = [];
     const values = [];

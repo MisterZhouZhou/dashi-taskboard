@@ -37,6 +37,47 @@ export interface DevelopmentScan {
   contexts: DevelopmentContext[];
 }
 
+export type AgentKind = "codex" | "claude-code";
+export type AutoClaimSandbox = "read-only" | "workspace-write";
+export type AutoClaimOutcome = "running" | "completed" | "failed";
+
+/**
+ * Which backend owns a project's auto-claim schedule. `codex-native` is the
+ * Codex app's own cron, reachable only from the injected host; the other two run
+ * in the taskboard server and work from a plain browser.
+ */
+export type AutoClaimExecutor = "codex-native" | AgentKind;
+
+export interface ProjectAutoClaim {
+  projectId: string;
+  enabled: boolean;
+  agent: AgentKind;
+  intervalMinutes: number;
+  sandbox: AutoClaimSandbox;
+  /** Codex only: its workspace-write sandbox blocks loopback until granted. */
+  networkAccess: boolean;
+  model: string | null;
+  reasoningEffort: string | null;
+  lastStartedAt: string | null;
+  lastFinishedAt: string | null;
+  lastIssue: string | null;
+  /** Which agent actually ran the last turn; `agent` above is who runs next. */
+  lastAgent: AgentKind | null;
+  lastOutcome: AutoClaimOutcome | null;
+  lastError: string | null;
+  running: boolean;
+}
+
+export interface ProjectAutoClaimInput {
+  enabled?: boolean;
+  agent?: AgentKind;
+  intervalMinutes?: number;
+  sandbox?: AutoClaimSandbox;
+  networkAccess?: boolean;
+  model?: string | null;
+  reasoningEffort?: string | null;
+}
+
 export interface TaskboardMetadata {
   manageTaskboardSkillPath?: string;
   capabilities?: TaskboardCapabilities;
@@ -425,6 +466,8 @@ export interface Task {
   startDate: string | null;
   dueDate: string | null;
   recurrence: Recurrence | null;
+  /** Overrides the project's auto-claim executor; null follows the project. */
+  executor: AgentKind | null;
   source: "local" | "jira";
   externalOrigin?: string | null;
   externalKey?: string | null;
@@ -526,6 +569,7 @@ export interface TaskDraft {
   startDate: string | null;
   dueDate: string | null;
   recurrence: Recurrence | null;
+  executor: AgentKind | null;
 }
 
 export interface TaskEvent {

@@ -402,6 +402,7 @@ export function TaskEditor({
         startDate: startDate || null,
         dueDate: dueDate || null,
         recurrence,
+        executor: task?.executor ?? null,
       }, attachments, inlineMediaImages(descriptionSegments), task ? undefined : {
         keepOpen: createMore,
         relations: { parentId, relatedIds, subIssueIds },

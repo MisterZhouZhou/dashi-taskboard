@@ -20,6 +20,8 @@ import type {
   IssueRelationType,
   JiraConnection,
   Project,
+  ProjectAutoClaim,
+  ProjectAutoClaimInput,
   ProjectReadme,
   ProjectReadmeAttachment,
   ProjectSummary,
@@ -199,6 +201,28 @@ export async function getProjectSummary(
     `/api/local/projects/${encodeURIComponent(projectId)}/summary`,
     { signal },
   );
+}
+
+export async function getProjectAutoClaim(
+  projectId: string,
+  signal?: AbortSignal,
+): Promise<ProjectAutoClaim> {
+  const data = await request<{ autoClaim: ProjectAutoClaim }>(
+    `/api/local/auto-claim/${encodeURIComponent(projectId)}`,
+    { signal },
+  );
+  return data.autoClaim;
+}
+
+export async function saveProjectAutoClaim(
+  projectId: string,
+  settings: ProjectAutoClaimInput,
+): Promise<ProjectAutoClaim> {
+  const data = await request<{ autoClaim: ProjectAutoClaim }>(
+    `/api/local/auto-claim/${encodeURIComponent(projectId)}`,
+    { method: "PUT", body: JSON.stringify(settings) },
+  );
+  return data.autoClaim;
 }
 
 export async function getTaskboardMetadata(signal?: AbortSignal): Promise<TaskboardMetadata> {

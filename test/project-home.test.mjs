@@ -71,7 +71,7 @@ test("new issues stage attachments in the composer and upload them after creatio
 });
 
 test("the issue composer includes Linear-style labels and scheduling", () => {
-  for (const label of ["缺陷", "特性", "for-claude", "hold", "改进", "phase-1", "phase-6"]) {
+  for (const label of ["缺陷", "特性", "hold", "改进", "phase-1", "phase-6"]) {
     assert.match(labelsSource, new RegExp(label));
   }
   assert.match(editorSource, /<LabelPicker/);

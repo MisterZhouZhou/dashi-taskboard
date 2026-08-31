@@ -29,14 +29,22 @@ export const DEFAULT_BOARD_DISPLAY_SETTINGS: BoardDisplaySettings = {
   hiddenStatuses: [],
 };
 
+export type BoardThemeMode = "auto" | "light" | "dark";
+
 interface BoardCardDisplayMenuProps {
   settings: BoardDisplaySettings;
+  themeMode: BoardThemeMode;
+  onThemeModeChange: (mode: BoardThemeMode) => void;
+  onLanguageChange: (language: "zh" | "en") => void;
   onChange: (value: BoardDisplaySettings) => void;
   onReset: () => void;
 }
 
 export function BoardCardDisplayMenu({
   settings,
+  themeMode,
+  onThemeModeChange,
+  onLanguageChange,
   onChange,
   onReset,
 }: BoardCardDisplayMenuProps) {
@@ -205,6 +213,44 @@ export function BoardCardDisplayMenu({
         >
           <span aria-hidden="true" />
         </button>
+      </div>
+      <div className="board-setting-segmented">
+        <span>{text("主题", "Theme")}</span>
+        <div role="radiogroup" aria-label={text("主题", "Theme")}>
+          {([
+            ["auto", text("跟随系统", "System")],
+            ["light", text("浅色", "Light")],
+            ["dark", text("深色", "Dark")],
+          ] as [BoardThemeMode, string][]).map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              role="radio"
+              aria-checked={themeMode === value}
+              className={"board-setting-segment" + (themeMode === value ? " is-on" : "")}
+              onClick={() => onThemeModeChange(value)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="board-setting-segmented">
+        <span>{text("语言", "Language")}</span>
+        <div role="radiogroup" aria-label={text("语言", "Language")}>
+          {([["zh", "中文"], ["en", "English"]] as ["zh" | "en", string][]).map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              role="radio"
+              aria-checked={language === value}
+              className={"board-setting-segment" + (language === value ? " is-on" : "")}
+              onClick={() => onLanguageChange(value)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
       </div>
       <button
         className="display-settings-more"

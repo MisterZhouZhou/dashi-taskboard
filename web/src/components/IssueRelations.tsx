@@ -412,9 +412,39 @@ export function IssueSubIssues({
 }
 
 const RELATION_GROUPS = [
-  { type: "blocked_by", field: "blockedBy", chineseLabel: "阻塞于", englishLabel: "Blocked by", chineseAddLabel: "添加阻塞议题", englishAddLabel: "Add blocker", tone: "blocked-by" },
-  { type: "blocks", field: "blocks", chineseLabel: "阻塞", englishLabel: "Blocks", chineseAddLabel: "添加被阻塞议题", englishAddLabel: "Add blocked issue", tone: "blocks" },
-  { type: "related", field: "related", chineseLabel: "相关议题", englishLabel: "Related issues", chineseAddLabel: "添加相关议题", englishAddLabel: "Add related issue", tone: "related" },
+  {
+    type: "blocked_by",
+    field: "blockedBy",
+    chineseLabel: "阻塞于",
+    englishLabel: "Blocked by",
+    chineseAddLabel: "添加阻塞议题",
+    englishAddLabel: "Add blocker",
+    chineseHint: "这些议题全部标记为「完成」后，本议题才会被自动认领；在此之前会被跳过。",
+    englishHint: "This issue is only auto-claimed once every issue listed here is marked done; until then it is skipped.",
+    tone: "blocked-by",
+  },
+  {
+    type: "blocks",
+    field: "blocks",
+    chineseLabel: "阻塞",
+    englishLabel: "Blocks",
+    chineseAddLabel: "添加被阻塞议题",
+    englishAddLabel: "Add blocked issue",
+    chineseHint: "本议题标记为「完成」后，这些议题才会被自动认领。反向关系，不影响本议题何时开始。",
+    englishHint: "The issues listed here wait until this one is marked done. This is the reverse relation and does not gate this issue.",
+    tone: "blocks",
+  },
+  {
+    type: "related",
+    field: "related",
+    chineseLabel: "相关议题",
+    englishLabel: "Related issues",
+    chineseAddLabel: "添加相关议题",
+    englishAddLabel: "Add related issue",
+    chineseHint: "",
+    englishHint: "",
+    tone: "related",
+  },
 ] as const;
 
 export function IssueRelationSidebar({
@@ -446,7 +476,12 @@ export function IssueRelationSidebar({
                 {group.type === "related" ? (
                   <RelationIcon color="currentColor" size={14} />
                 ) : (
-                  <BlockingRelationIcon type={group.type} color="currentColor" />
+                  <BlockingRelationIcon
+                    type={group.type}
+                    color="currentColor"
+                    title={text(group.chineseHint, group.englishHint)}
+                    aria-label={text(group.chineseHint, group.englishHint)}
+                  />
                 )}
                 {label}
               </span>

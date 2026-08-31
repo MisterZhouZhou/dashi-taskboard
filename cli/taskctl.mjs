@@ -9,6 +9,7 @@ import { promisify } from "node:util";
 
 import { normalizeCloudUrl } from "../server/cloud-config.mjs";
 import {
+  AGENT_KINDS,
   DEFAULT_PROJECT_ID,
   TASK_STATUSES,
   isTaskPriority,
@@ -476,6 +477,18 @@ async function execute(parsed, overrides) {
   }
 }
 
+function resolveAgentKind(env) {
+  const explicit = env.TASKBOARD_AGENT?.trim();
+  if (explicit) {
+    if (!AGENT_KINDS.has(explicit)) {
+      throw usageError(`TASKBOARD_AGENT must be one of ${[...AGENT_KINDS].join(", ")}`);
+    }
+    return explicit;
+  }
+  if (env.CLAUDECODE === "1" || env.CLAUDE_CODE_SESSION_ID !== undefined) return "claude-code";
+  return "codex";
+}
+
 function createApiClient(overrides, {
   url: explicitBaseUrl,
   windowsTransport = false,
@@ -492,6 +505,7 @@ function createApiClient(overrides, {
   }
 
   const env = overrides.env ?? process.env;
+  const agentKind = resolveAgentKind(env);
   const baseUrl = normalizeBaseUrl(explicitBaseUrl ?? DEFAULT_API_URL);
 
   return {
@@ -503,6 +517,7 @@ function createApiClient(overrides, {
           headers: {
             accept: "application/json",
             "x-taskboard-client": "taskctl",
+            "x-taskboard-agent": agentKind,
             ...(body === undefined ? {} : { "content-type": "application/json" }),
           },
           ...(body === undefined ? {} : { body: JSON.stringify(body) }),
@@ -539,6 +554,7 @@ function createApiClient(overrides, {
           headers: {
             accept: "*/*",
             "x-taskboard-client": "taskctl",
+            "x-taskboard-agent": agentKind,
           },
         });
       } catch (error) {
@@ -575,6 +591,7 @@ function createApiClient(overrides, {
             accept: "application/json",
             "content-type": contentType,
             "x-taskboard-client": "taskctl",
+            "x-taskboard-agent": agentKind,
             "x-taskboard-filename": encodeURIComponent(filename),
             "x-taskboard-attachment-kind": kind,
           },
@@ -1126,9 +1143,14 @@ function recurrenceFromOptions(options) {
 
 function resolveThreadId(options, overrides) {
   const env = overrides.env ?? process.env;
-  const value = options["thread-id"] ?? env.CODEX_THREAD_ID;
+  const fromEnvironment = resolveAgentKind(env) === "claude-code"
+    ? env.CLAUDE_CODE_SESSION_ID ?? env.CODEX_THREAD_ID
+    : env.CODEX_THREAD_ID ?? env.CLAUDE_CODE_SESSION_ID;
+  const value = options["thread-id"] ?? fromEnvironment;
   if (typeof value !== "string" || value.trim().length === 0) {
-    throw usageError("Codex conversation attribution requires --thread-id or CODEX_THREAD_ID");
+    throw usageError(
+      "Conversation attribution requires --thread-id or CODEX_THREAD_ID / CLAUDE_CODE_SESSION_ID",
+    );
   }
   const threadId = value.trim();
   if (threadId.length > 256) {
