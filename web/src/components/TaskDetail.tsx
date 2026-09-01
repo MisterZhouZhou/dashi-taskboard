@@ -31,6 +31,7 @@ import { TASK_PRIORITIES, TASK_STATUSES } from "../types";
 import type {
   ActorIdentity,
   AgentKind,
+  ProjectAutoClaim,
   Attachment,
   Comment,
   CodexThreadBinding,
@@ -134,6 +135,10 @@ interface TaskDetailProps {
   onOpenInThread: (task: Task) => void;
   onCopy: (text: string, announcement: string) => void;
   openingThread: boolean;
+  /** Project auto-claim state, so "run now" can reflect an in-flight turn. */
+  autoClaim?: ProjectAutoClaim;
+  /** Owned by App so the returned state seeds the poll that shows progress. */
+  onRunNow: (task: Task) => Promise<void>;
   onError: (message: TaskDetailError | null) => void;
 }
 
@@ -401,6 +406,8 @@ export function TaskDetail({
   onOpenInThread,
   onCopy,
   openingThread,
+  autoClaim,
+  onRunNow,
   onError,
 }: TaskDetailProps) {
   const { language, locale, text } = useTaskboardI18n();
@@ -415,6 +422,50 @@ export function TaskDetail({
     "status" | "priority" | "assignee" | "labels" | "development" | "recurrence" | "executor" | null
   >(null);
   const [savingProperty, setSavingProperty] = useState<string | null>(null);
+  const [runningNow, setRunningNow] = useState(false);
+  const [runNowError, setRunNowError] = useState<TaskDetailError | null>(null);
+
+  // The POST returns as soon as the turn is spawned, so request state alone would
+  // show "run now" again while the agent is still working. The project's own
+  // running flag is the real signal.
+  const turnRunningHere = autoClaim?.running === true
+    && autoClaim.lastIssue === currentTask.identifier;
+  const turnRunningElsewhere = autoClaim?.running === true && !turnRunningHere;
+  const notClaimable = currentTask.status !== "todo";
+  const runNowDisabled = runningNow || turnRunningHere || turnRunningElsewhere || notClaimable;
+  const runNowLabel = turnRunningHere || runningNow
+    ? text("正在执行…", "Running…")
+    : text("立即执行", "Run now");
+  const runNowTitle = notClaimable
+    ? text("只有「等待认领」的议题可以立即执行", "Only issues waiting to be claimed can be run now")
+    : turnRunningElsewhere
+      ? text(
+        `该项目正在处理 ${autoClaim?.lastIssue ?? "另一个议题"}`,
+        `This project is working on ${autoClaim?.lastIssue ?? "another issue"}`,
+      )
+      : turnRunningHere
+        ? text("正在执行这条议题", "This issue is running")
+        : text(
+          "立即派给执行器处理，不等自动认领的下一轮",
+          "Dispatch to the executor now instead of waiting for the next auto-claim tick",
+        );
+
+  /**
+   * Manual dispatch. The scheduler skips silently because it retries every
+   * interval; a button press has to surface the refusal reason instead.
+   */
+  async function runNow() {
+    setRunningNow(true);
+    setRunNowError(null);
+    try {
+      await onRunNow(currentTask);
+    } catch (error) {
+      setRunNowError(issueMessageFor(error));
+    } finally {
+      setRunningNow(false);
+    }
+  }
+
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [attachmentsError, setAttachmentsError] = useState<TaskDetailError | null>(null);
   const [uploadingAttachments, setUploadingAttachments] = useState(false);
@@ -1623,6 +1674,21 @@ export function TaskDetail({
 
           <aside className="issue-properties" aria-label={text("议题属性", "Issue properties")}>
             <div className="detail-primary-actions">
+              <button
+                className="detail-open-thread-action"
+                type="button"
+                disabled={runNowDisabled}
+                title={runNowTitle}
+                onClick={() => void runNow()}
+              >
+                <NewConversationIcon color="currentColor" />
+                <span>{runNowLabel}</span>
+              </button>
+              {runNowError && (
+                <p className="detail-run-now-error" role="alert">
+                  {typeof runNowError === "string" ? runNowError : text(...runNowError)}
+                </p>
+              )}
               <button
                 className="detail-open-thread-action"
                 type="button"

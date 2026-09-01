@@ -15,6 +15,9 @@ import type {
   ComposerTurnInput,
   CodexThreadBinding,
   DevelopmentScan,
+  ExecutionEvent,
+  ExecutionRun,
+  ExecutionRunSnapshot,
   HostContext,
   IssueRelationOrigin,
   IssueRelationType,
@@ -203,6 +206,66 @@ export async function getProjectSummary(
   );
 }
 
+export async function listExecutionRuns(filters: {
+  status?: string;
+  projectId?: string;
+  taskId?: string;
+  limit?: number;
+} = {}, signal?: AbortSignal): Promise<ExecutionRun[]> {
+  const query = new URLSearchParams();
+  if (filters.status) query.set("status", filters.status);
+  if (filters.projectId) query.set("projectId", filters.projectId);
+  if (filters.taskId) query.set("taskId", filters.taskId);
+  if (filters.limit !== undefined) query.set("limit", String(filters.limit));
+  const suffix = query.toString() ? `?${query}` : "";
+  const data = await request<{ executions: ExecutionRun[] }>(`/api/local/executions${suffix}`, { signal });
+  return data.executions;
+}
+
+export async function getExecutionRun(
+  runId: string,
+  signal?: AbortSignal,
+): Promise<ExecutionRunSnapshot> {
+  return request<ExecutionRunSnapshot>(`/api/local/executions/${encodeURIComponent(runId)}`, { signal });
+}
+
+export async function listExecutionEvents(
+  runId: string,
+  after = 0,
+  signal?: AbortSignal,
+): Promise<ExecutionEvent[]> {
+  const data = await request<{ events: ExecutionEvent[] }>(
+    `/api/local/executions/${encodeURIComponent(runId)}/events?after=${after}`,
+    { signal },
+  );
+  return data.events;
+}
+
+export function subscribeExecutionEvents(
+  onEvent: (event: { type: string; runId?: string; run?: ExecutionRun; event?: ExecutionEvent }) => void,
+  onError?: () => void,
+): () => void {
+  const source = new EventSource(resolveTaskboardUrl("/api/events"));
+  const names = ["execution.created", "execution.updated", "execution.event", "execution.finished"];
+  const listeners = names.map((name) => {
+    const listener = (raw: Event) => {
+      const message = raw as MessageEvent<string>;
+      try {
+        onEvent({ type: name, ...(message.data ? JSON.parse(message.data) : {}) });
+      } catch {
+        onEvent({ type: name });
+      }
+    };
+    source.addEventListener(name, listener);
+    return [name, listener] as const;
+  });
+  if (onError) source.addEventListener("error", onError);
+  return () => {
+    for (const [name, listener] of listeners) source.removeEventListener(name, listener);
+    source.close();
+  };
+}
+
 export async function getProjectAutoClaim(
   projectId: string,
   signal?: AbortSignal,
@@ -221,6 +284,17 @@ export async function saveProjectAutoClaim(
   const data = await request<{ autoClaim: ProjectAutoClaim }>(
     `/api/local/auto-claim/${encodeURIComponent(projectId)}`,
     { method: "PUT", body: JSON.stringify(settings) },
+  );
+  return data.autoClaim;
+}
+
+export async function runProjectAutoClaim(
+  projectId: string,
+  issueId: string,
+): Promise<ProjectAutoClaim> {
+  const data = await request<{ autoClaim: ProjectAutoClaim }>(
+    `/api/local/auto-claim/${encodeURIComponent(projectId)}/run`,
+    { method: "POST", body: JSON.stringify({ issueId }) },
   );
   return data.autoClaim;
 }

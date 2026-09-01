@@ -57,6 +57,15 @@ interface ProjectAutomationMenuProps {
   onChange: (draft: AutomationDraft) => void;
 }
 
+/**
+ * Fixed list for the CLI executors instead of a catalog lookup: `codex debug
+ * models` only describes Codex, and Claude Code has no equivalent command.
+ * These are the levels `claude --effort` accepts; Codex validates per model, so
+ * an unsupported level surfaces as a turn error rather than being filtered here.
+ */
+const CLI_EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"] as const;
+const CLI_EFFORT_DEFAULT = "medium";
+
 const EFFORT_LABELS: Record<string, readonly [string, string]> = {
   low: ["轻度", "Low"],
   medium: ["中", "Medium"],
@@ -86,8 +95,10 @@ function automationOptions(
     intervalMinutes: (native
       ? automation?.intervalMinutes
       : autoClaim?.intervalMinutes) as IntervalMinutes ?? 5,
-    model: model?.slug ?? "",
-    reasoningEffort: reasoningEffort ?? "",
+    model: native ? model?.slug ?? "" : autoClaim?.model ?? "",
+    reasoningEffort: native
+      ? reasoningEffort ?? ""
+      : autoClaim?.reasoningEffort ?? "",
     sandbox: autoClaim?.sandbox ?? "workspace-write",
     networkAccess: autoClaim?.networkAccess ?? true,
   };
@@ -251,10 +262,19 @@ export function ProjectAutomationMenu({
           triggerClassName="project-automation-picker-trigger"
           ariaLabel={text("执行器", "Executor")}
           onOpenChange={(open) => setPickerMenu(open ? "executor" : null)}
-          onChange={(value) => submitChange({
-            ...draft,
-            executor: value as AutoClaimExecutor,
-          })}
+          onChange={(value) => {
+            // Model and effort belong to the target executor's domain: the native
+            // path needs a model the Codex app knows, the CLI paths take a free
+            // string. Carrying the old value across would leak one into the other.
+            const nextExecutor = value as AutoClaimExecutor;
+            const rebuilt = automationOptions(models, nextExecutor, automation, autoClaim);
+            submitChange({
+              ...draft,
+              executor: nextExecutor,
+              model: rebuilt.model,
+              reasoningEffort: rebuilt.reasoningEffort,
+            });
+          }}
         />
       </div>
       <div className="project-automation-switch">
@@ -386,6 +406,43 @@ export function ProjectAutomationMenu({
           )}
         </p>
       )}
+      {!native && (
+        <>
+          <div className="project-automation-field">
+            <span>{text("模型", "Model")}</span>
+            <input
+              className="project-automation-text-input"
+              type="text"
+              value={draft.model}
+              disabled={disabled}
+              placeholder={text("留空用 CLI 默认", "Blank = CLI default")}
+              aria-label={text("模型", "Model")}
+              onChange={(event) => setDraft({ ...draft, model: event.target.value })}
+              onBlur={() => {
+                if (draft.model !== (autoClaim?.model ?? "")) submitChange(draft);
+              }}
+            />
+          </div>
+          <div className="project-automation-field">
+            <span>{text("推理强度", "Reasoning effort")}</span>
+            <TaskPropertyPicker
+              value={draft.reasoningEffort || CLI_EFFORT_DEFAULT}
+              options={CLI_EFFORT_LEVELS.map((effort) => ({
+                value: effort,
+                label: EFFORT_LABELS[effort] ? text(...EFFORT_LABELS[effort]) : effort,
+                icon: <LinearIcon name="displayOptions" />,
+              }))}
+              open={pickerMenu === "reasoning"}
+              disabled={disabled}
+              className="project-automation-picker"
+              triggerClassName="project-automation-picker-trigger"
+              ariaLabel={text("推理强度", "Reasoning effort")}
+              onOpenChange={(open) => setPickerMenu(open ? "reasoning" : null)}
+              onChange={(value) => submitChange({ ...draft, reasoningEffort: value })}
+            />
+          </div>
+        </>
+      )}
       {native && selectedModel && (
         <>
           <div className="project-automation-field">
@@ -476,7 +533,7 @@ export function ProjectAutomationMenu({
   const onDutyAgent = running && autoClaim?.lastAgent
     ? autoClaim.lastAgent
     : executor === "codex-native" ? null : executor;
-  const onDuty = onDutyAgent ? text(...AGENT_SHORT_LABELS[onDutyAgent]) : null;
+  const onDuty = onDutyAgent ? text(...EXECUTOR_LABELS[onDutyAgent]) : null;
   const triggerLabel = running
     ? text("自动认领中", "Auto-claiming")
     : text("自动化", "Automation");

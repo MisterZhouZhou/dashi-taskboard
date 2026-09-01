@@ -26,6 +26,7 @@ import {
   getAiChatCatalog,
   getCodexThreadProgress,
   getHostRuntime,
+  getTask,
   getJiraConnection,
   getProjectAutoClaim,
   getTaskboardRevision,
@@ -41,6 +42,7 @@ import {
   resolveTaskboardUrl,
   resolveTaskboardWebSocketUrl,
   restoreTask as restoreTaskRequest,
+  runProjectAutoClaim,
   saveProjectAutoClaim,
   setApiText,
   setCurrentUserActor,
@@ -61,6 +63,7 @@ import {
   type BoardDisplaySettings,
 } from "./components/BoardCardDisplayMenu";
 import { DashboardView } from "./components/DashboardView";
+import { ExecutionCenter } from "./components/ExecutionCenter";
 import { ProjectReadmeView } from "./components/ProjectReadmeView";
 import { IssueListView } from "./components/IssueListView";
 import { JiraConnectionDialog } from "./components/JiraConnectionDialog";
@@ -791,6 +794,7 @@ export function App() {
   const [ganttHideCompleted, setGanttHideCompleted] = useState(false);
   const [ganttTodayRequest, setGanttTodayRequest] = useState(0);
   const [ganttViewMenuOpen, setGanttViewMenuOpen] = useState(false);
+  const [executionCenterOpen, setExecutionCenterOpen] = useState(false);
   const [otherTasksOpen, setOtherTasksOpen] = useState(false);
   const [otherTasksMounted, setOtherTasksMounted] = useState(false);
   const [otherTasksVisible, setOtherTasksVisible] = useState(false);
@@ -1575,6 +1579,13 @@ export function App() {
         intervalMinutes: draft.intervalMinutes,
         sandbox: draft.sandbox,
         networkAccess: draft.networkAccess,
+        // Model and effort are only the CLI executors' settings. The native path's
+        // model has to be one the Codex app knows and travels in its cron payload,
+        // so writing it here would overwrite the CLI value with a foreign one.
+        ...(agent === null ? {} : {
+          model: draft.model.trim() || null,
+          reasoningEffort: draft.reasoningEffort || null,
+        }),
       });
       setProjectAutoClaims((current) => ({ ...current, [projectId]: autoClaim }));
     } catch (error) {
@@ -1718,6 +1729,16 @@ export function App() {
     media.addEventListener("change", syncTheme);
     return () => media.removeEventListener("change", syncTheme);
   }, [embedded, themeMode]);
+
+  /**
+   * Owns the manual dispatch so the response seeds `projectAutoClaims`. Without
+   * that the running flag never flips locally and the poll that shows progress
+   * never starts.
+   */
+  const runAutoClaimForIssue = useCallback(async (task: Task) => {
+    const autoClaim = await runProjectAutoClaim(task.projectId, task.id);
+    setProjectAutoClaims((current) => ({ ...current, [task.projectId]: autoClaim }));
+  }, []);
 
   const setThemeMode = useCallback((mode: ThemeMode) => {
     setThemeModeState(mode);
@@ -3566,6 +3587,18 @@ export function App() {
                 onChange={(draft) => void saveAutomationDraft(draft)}
               />
             )}
+            <ExecutionCenter
+              open={executionCenterOpen}
+              onOpenChange={setExecutionCenterOpen}
+              onOpenTask={(taskId) => {
+                const task = tasksRef.current.find((candidate) => candidate.id === taskId);
+                if (task) {
+                  openTaskDetail(task);
+                  return;
+                }
+                void getTask(taskId).then(openTaskDetail).catch((error) => setActionError(errorMessage(error)));
+              }}
+            />
             {isJiraProject && (
               <button
                 className="icon-button"
@@ -3757,6 +3790,8 @@ export function App() {
             developmentScanLoading={developmentScanLoading}
             commentsRevision={commentsRevision}
             attachmentsRevision={attachmentsRevision}
+            autoClaim={projectAutoClaims[detailTask.projectId]}
+            onRunNow={runAutoClaimForIssue}
             onCreateLabel={persistProjectLabel}
             onDeleteLabel={removeProjectLabel}
             onUpdate={(current, changes) => updateTaskProperties(current, changes)}

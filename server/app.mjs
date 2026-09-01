@@ -24,6 +24,7 @@ import { resolveCodexExecutable } from "../shared/codex-executable.mjs";
 import { withoutTaskboardLauncherEnvironment } from "../shared/codex-environment.mjs";
 import { AiChatService } from "./ai-chat.mjs";
 import { AutoClaimService } from "./auto-claim.mjs";
+import { ExecutionService } from "./execution-service.mjs";
 import { resolveAiWorkspace, resolveMappedAiWorkspace } from "./ai-chat-catalog.mjs";
 import { decodeComposerReferenceKey } from "./composer-reference.mjs";
 import { createCloudConfigStore } from "./cloud-config.mjs";
@@ -1912,8 +1913,10 @@ export function createTaskboardServer(options = {}) {
     processEnv: codexProcessEnvironment,
     workspacePath: PROJECT_ROOT,
   });
+  const execution = new ExecutionService({ database, events });
   const autoClaim = new AutoClaimService({
     database,
+    execution,
     processEnv: codexProcessEnvironment,
   });
   const aiEventResponses = new Set();
@@ -2327,6 +2330,66 @@ export function createTaskboardServer(options = {}) {
         const connection = await jira.sync({ force: true });
         events.emit("project.labels.updated", { project: database.getProject(JIRA_PROJECT_ID) });
         return sendJson(response, 200, { connection });
+      }
+
+      if (pathname === "/api/local/executions") {
+        if (request.method !== "GET") return methodNotAllowed(response, ["GET"]);
+        assertAllowedQuery(
+          url.searchParams,
+          new Set(["status", "projectId", "taskId", "limit"]),
+          "GET /api/local/executions",
+        );
+        await assertEmptyRequestBody(request, "GET /api/local/executions");
+        const rawLimit = url.searchParams.get("limit");
+        const limit = rawLimit === null ? 50 : Number(rawLimit);
+        if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
+          throw new ApiError(400, "INVALID_FIELD", "'limit' must be an integer from 1 to 100");
+        }
+        return sendJson(response, 200, {
+          executions: execution.listRuns({
+            status: url.searchParams.get("status") ?? undefined,
+            projectId: url.searchParams.get("projectId") ?? undefined,
+            taskId: url.searchParams.get("taskId") ?? undefined,
+            limit,
+          }),
+        });
+      }
+
+      const executionEventsRoute = pathname.match(/^\/api\/local\/executions\/([^/]+)\/events$/);
+      if (executionEventsRoute) {
+        if (request.method !== "GET") return methodNotAllowed(response, ["GET"]);
+        assertAllowedQuery(url.searchParams, new Set(["after"]), "GET /api/local/executions/:runId/events");
+        await assertEmptyRequestBody(request, "GET /api/local/executions/:runId/events");
+        const runId = decodeRouteSegment(executionEventsRoute[1], "execution id");
+        const rawAfter = url.searchParams.get("after");
+        const after = rawAfter === null ? 0 : Number(rawAfter);
+        if (!Number.isSafeInteger(after) || after < 0) {
+          throw new ApiError(400, "INVALID_FIELD", "'after' must be a non-negative integer");
+        }
+        return sendJson(response, 200, { events: execution.listEvents(runId, after) });
+      }
+
+      const executionRoute = pathname.match(/^\/api\/local\/executions\/([^/]+)$/);
+      if (executionRoute) {
+        if (request.method !== "GET") return methodNotAllowed(response, ["GET"]);
+        assertNoQuery(url.searchParams, "GET /api/local/executions/:runId");
+        await assertEmptyRequestBody(request, "GET /api/local/executions/:runId");
+        const runId = decodeRouteSegment(executionRoute[1], "execution id");
+        const snapshot = execution.getRun(runId);
+        if (!snapshot) throw new ApiError(404, "EXECUTION_NOT_FOUND", `Execution '${runId}' does not exist`);
+        return sendJson(response, 200, snapshot);
+      }
+
+      const autoClaimRunRoute = pathname.match(/^\/api\/local\/auto-claim\/([^/]+)\/run$/);
+      if (autoClaimRunRoute) {
+        const projectId = decodeRouteSegment(autoClaimRunRoute[1], "project id");
+        assertNoQuery(url.searchParams, "POST /api/local/auto-claim/:projectId/run");
+        if (request.method !== "POST") return methodNotAllowed(response, ["POST"]);
+        const body = await readJson(request);
+        assertPlainObject(body);
+        assertAllowedKeys(body, new Set(["issueId"]));
+        const issueId = stringField(body.issueId, "issueId", { required: true, maxLength: 64 });
+        return sendJson(response, 200, { autoClaim: autoClaim.runIssueNow(projectId, issueId) });
       }
 
       const autoClaimRoute = pathname.match(/^\/api\/local\/auto-claim\/([^/]+)$/);

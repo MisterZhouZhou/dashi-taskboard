@@ -68,6 +68,58 @@ export interface ProjectAutoClaim {
   running: boolean;
 }
 
+export type ExecutionRunStatus = "queued" | "running" | "completed" | "failed" | "interrupted";
+export type ExecutionSource = "manual" | "auto-claim";
+export type ExecutionEventType =
+  | "agent_message"
+  | "command_started"
+  | "command_output"
+  | "command_completed"
+  | "file_change"
+  | "tool_call"
+  | "error"
+  | "run_completed"
+  | "run_failed"
+  | "run_interrupted";
+export type ExecutionEventRole = "agent" | "command" | "tool" | "system" | "error";
+
+export interface ExecutionRun {
+  id: string;
+  projectId: string;
+  projectName: string;
+  taskId: string;
+  taskIdentifier: string;
+  taskTitle: string;
+  source: ExecutionSource;
+  agent: AgentKind;
+  threadId: string | null;
+  status: ExecutionRunStatus;
+  startedAt: string;
+  finishedAt: string | null;
+  lastEventAt: string | null;
+  lastEventSummary: string | null;
+  error: string | null;
+}
+
+export interface ExecutionEvent {
+  id: string;
+  runId: string;
+  sequence: number;
+  type: ExecutionEventType;
+  role: ExecutionEventRole;
+  content: string;
+  command?: string | null;
+  output?: string | null;
+  files?: string[] | null;
+  data?: Record<string, unknown> | null;
+  createdAt: string;
+}
+
+export interface ExecutionRunSnapshot {
+  run: ExecutionRun;
+  events: ExecutionEvent[];
+}
+
 export interface ProjectAutoClaimInput {
   enabled?: boolean;
   agent?: AgentKind;

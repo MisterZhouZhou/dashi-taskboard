@@ -153,7 +153,7 @@ test("unavailable automation state has one notice, clears stale errors, and cann
     menuSource,
     /const disabled = pending\s*\|\| Boolean\(unavailableReason\)\s*\|\| \(native && !selectedModel\)/,
   );
-  assert.equal(menuSource.match(/disabled=\{disabled\}/g)?.length, 6);
+  assert.equal(menuSource.match(/disabled=\{disabled\}/g)?.length, 8);
   const reconcileSource = appSource.slice(
     appSource.indexOf("const reconcileProjectAutomation"),
     appSource.indexOf("const saveProjectAutomation"),

@@ -55,7 +55,7 @@ export function buildAgentTurnArgs(kind, {
     throw new Error(`Unattended turns support read-only or workspace-write, received '${sandbox}'`);
   }
   return kind === "claude-code"
-    ? claudeCodeArgs({ workspacePath, sandbox, model, sessionId })
+    ? claudeCodeArgs({ workspacePath, sandbox, model, reasoningEffort, sessionId })
     : codexArgs({ workspacePath, sandbox, networkAccess, model, reasoningEffort });
 }
 
@@ -87,7 +87,7 @@ function codexArgs({ workspacePath, sandbox, networkAccess, model, reasoningEffo
   return args;
 }
 
-function claudeCodeArgs({ workspacePath, sandbox, model, sessionId }) {
+function claudeCodeArgs({ workspacePath, sandbox, model, reasoningEffort, sessionId }) {
   const args = [
     "-p",
     "--output-format",
@@ -102,6 +102,7 @@ function claudeCodeArgs({ workspacePath, sandbox, model, sessionId }) {
   ];
   if (sessionId) args.push("--session-id", sessionId);
   if (model) args.push("--model", model);
+  if (reasoningEffort) args.push("--effort", reasoningEffort);
   return args;
 }
 

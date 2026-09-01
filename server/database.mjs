@@ -4,6 +4,12 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
 import { DEFAULT_LABEL_NAMES, JIRA_PROJECT_ID } from "../shared/domain.mjs";
+import {
+  EXECUTION_EVENT_ROLES,
+  EXECUTION_EVENT_TYPES,
+  EXECUTION_RUN_STATUSES,
+  EXECUTION_SOURCES,
+} from "../shared/execution.mjs";
 
 const DEFAULT_PROJECT_LABELS_JSON = JSON.stringify(DEFAULT_LABEL_NAMES);
 const TASK_TREE_MAX_NODES = 1_000;
@@ -385,6 +391,42 @@ function projectAutoClaimFromRow(row) {
   };
 }
 
+function executionRunFromRow(row) {
+  return {
+    id: row.id,
+    projectId: row.project_id,
+    projectName: row.project_name,
+    taskId: row.task_id,
+    taskIdentifier: row.task_identifier,
+    taskTitle: row.task_title,
+    source: row.source,
+    agent: row.agent,
+    threadId: row.thread_id,
+    status: row.status,
+    startedAt: row.started_at,
+    finishedAt: row.finished_at,
+    lastEventAt: row.last_event_at,
+    lastEventSummary: row.last_event_summary,
+    error: row.error,
+  };
+}
+
+function executionEventFromRow(row) {
+  return {
+    id: row.id,
+    runId: row.run_id,
+    sequence: row.sequence,
+    type: row.type,
+    role: row.role,
+    content: row.content,
+    ...(row.command === null ? {} : { command: row.command }),
+    ...(row.output === null ? {} : { output: row.output }),
+    ...(row.files === null ? {} : { files: JSON.parse(row.files) }),
+    ...(row.data === null ? {} : { data: JSON.parse(row.data) }),
+    createdAt: row.created_at,
+  };
+}
+
 function projectReadmeFromRow(row, projectId) {
   return {
     projectId: row.project_id ?? projectId,
@@ -471,6 +513,7 @@ export class TaskboardDatabase {
     this.database.exec("PRAGMA foreign_keys = ON; PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;");
     this.#migrate();
     this.interruptAbandonedAiChatRuns();
+    this.interruptAbandonedExecutionRuns();
   }
 
   #migrate() {
@@ -629,6 +672,49 @@ export class TaskboardDatabase {
         last_outcome TEXT,
         last_error TEXT
       );
+
+      CREATE TABLE IF NOT EXISTS execution_runs (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+        task_identifier TEXT NOT NULL,
+        source TEXT NOT NULL CHECK (source IN ('manual', 'auto-claim')),
+        agent TEXT NOT NULL CHECK (agent IN ('codex', 'claude-code')),
+        thread_id TEXT,
+        status TEXT NOT NULL CHECK (status IN (
+          'queued', 'running', 'completed', 'failed', 'interrupted'
+        )),
+        started_at TEXT NOT NULL,
+        finished_at TEXT,
+        last_event_at TEXT,
+        last_event_summary TEXT,
+        error TEXT
+      );
+
+      CREATE INDEX IF NOT EXISTS execution_runs_status_started
+        ON execution_runs(status, started_at DESC, id);
+      CREATE INDEX IF NOT EXISTS execution_runs_project_started
+        ON execution_runs(project_id, started_at DESC, id);
+      CREATE INDEX IF NOT EXISTS execution_runs_task_started
+        ON execution_runs(task_id, started_at DESC, id);
+
+      CREATE TABLE IF NOT EXISTS execution_events (
+        id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL REFERENCES execution_runs(id) ON DELETE CASCADE,
+        sequence INTEGER NOT NULL CHECK (sequence > 0),
+        type TEXT NOT NULL,
+        role TEXT NOT NULL,
+        content TEXT NOT NULL DEFAULT '',
+        command TEXT,
+        output TEXT,
+        files TEXT,
+        data TEXT,
+        created_at TEXT NOT NULL,
+        UNIQUE(run_id, sequence)
+      );
+
+      CREATE INDEX IF NOT EXISTS execution_events_run_sequence
+        ON execution_events(run_id, sequence);
 
       CREATE TABLE IF NOT EXISTS ai_chat_threads (
         id TEXT PRIMARY KEY,
@@ -1611,6 +1697,158 @@ export class TaskboardDatabase {
     return this.getProjectAutoClaim(projectId);
   }
 
+  createExecutionRun(input) {
+    if (!EXECUTION_SOURCES.includes(input.source)) {
+      throw new ApiError(400, "INVALID_FIELD", "Invalid execution source");
+    }
+    if (!EXECUTION_RUN_STATUSES.includes(input.status ?? "queued")) {
+      throw new ApiError(400, "INVALID_FIELD", "Invalid execution status");
+    }
+    const id = input.id ?? randomUUID();
+    const timestamp = input.startedAt ?? now();
+    this.database.prepare(`
+      INSERT INTO execution_runs (
+        id, project_id, task_id, task_identifier, source, agent, thread_id,
+        status, started_at, finished_at, last_event_at, last_event_summary, error
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      id,
+      input.projectId,
+      input.taskId,
+      input.taskIdentifier,
+      input.source,
+      input.agent,
+      input.threadId ?? null,
+      input.status ?? "queued",
+      timestamp,
+      input.finishedAt ?? null,
+      input.lastEventAt ?? null,
+      input.lastEventSummary ?? null,
+      input.error ?? null,
+    );
+    return this.getExecutionRun(id);
+  }
+
+  getExecutionRun(id) {
+    const row = this.database.prepare(`
+      SELECT execution_runs.*, projects.name AS project_name,
+             tasks.title AS task_title
+      FROM execution_runs
+      JOIN projects ON projects.id = execution_runs.project_id
+      JOIN tasks ON tasks.id = execution_runs.task_id
+      WHERE execution_runs.id = ?
+    `).get(id);
+    return row ? executionRunFromRow(row) : null;
+  }
+
+  listExecutionRuns({ status, projectId, taskId, limit = 50 } = {}) {
+    const clauses = [];
+    const params = [];
+    if (status !== undefined) {
+      if (!EXECUTION_RUN_STATUSES.includes(status)) {
+        throw new ApiError(400, "INVALID_FIELD", "Invalid execution status");
+      }
+      clauses.push("execution_runs.status = ?");
+      params.push(status);
+    }
+    if (projectId !== undefined) {
+      clauses.push("execution_runs.project_id = ?");
+      params.push(projectId);
+    }
+    if (taskId !== undefined) {
+      clauses.push("execution_runs.task_id = ?");
+      params.push(taskId);
+    }
+    const boundedLimit = Math.min(Math.max(Number(limit) || 50, 1), 100);
+    const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
+    return this.database.prepare(`
+      SELECT execution_runs.*, projects.name AS project_name,
+             tasks.title AS task_title
+      FROM execution_runs
+      JOIN projects ON projects.id = execution_runs.project_id
+      JOIN tasks ON tasks.id = execution_runs.task_id
+      ${where}
+      ORDER BY
+        CASE WHEN execution_runs.status = 'running' THEN 0 ELSE 1 END,
+        execution_runs.started_at DESC, execution_runs.id DESC
+      LIMIT ?
+    `).all(...params, boundedLimit).map(executionRunFromRow);
+  }
+
+  appendExecutionEvent(runId, input) {
+    if (!EXECUTION_EVENT_TYPES.includes(input.type)) {
+      throw new ApiError(400, "INVALID_FIELD", "Invalid execution event type");
+    }
+    if (!EXECUTION_EVENT_ROLES.includes(input.role)) {
+      throw new ApiError(400, "INVALID_FIELD", "Invalid execution event role");
+    }
+    const run = this.getExecutionRun(runId);
+    if (!run) throw new ApiError(404, "EXECUTION_NOT_FOUND", `Execution '${runId}' does not exist`);
+    const id = input.id ?? randomUUID();
+    const timestamp = input.createdAt ?? now();
+    const sequence = this.database.prepare(`
+      SELECT COALESCE(MAX(sequence), 0) + 1 AS next_sequence
+      FROM execution_events WHERE run_id = ?
+    `).get(runId).next_sequence;
+    const summary = input.summary || input.content || input.command || input.output || input.type;
+    this.database.prepare(`
+      INSERT INTO execution_events (
+        id, run_id, sequence, type, role, content, command, output, files, data, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      id,
+      runId,
+      sequence,
+      input.type,
+      input.role,
+      input.content ?? "",
+      input.command ?? null,
+      input.output ?? null,
+      input.files === undefined || input.files === null ? null : JSON.stringify(input.files),
+      input.data === undefined || input.data === null ? null : JSON.stringify(input.data),
+      timestamp,
+    );
+    this.database.prepare(`
+      UPDATE execution_runs
+      SET last_event_at = ?, last_event_summary = ?
+      WHERE id = ?
+    `).run(timestamp, String(summary ?? "").slice(0, 240), runId);
+    return {
+      run: this.getExecutionRun(runId),
+      event: executionEventFromRow(this.database.prepare(
+        "SELECT * FROM execution_events WHERE id = ?",
+      ).get(id)),
+    };
+  }
+
+  listExecutionEvents(runId, afterSequence = 0) {
+    if (!this.getExecutionRun(runId)) {
+      throw new ApiError(404, "EXECUTION_NOT_FOUND", `Execution '${runId}' does not exist`);
+    }
+    return this.database.prepare(`
+      SELECT * FROM execution_events
+      WHERE run_id = ? AND sequence > ?
+      ORDER BY sequence
+    `).all(runId, Number(afterSequence) || 0).map(executionEventFromRow);
+  }
+
+  updateExecutionRunThread(runId, threadId) {
+    this.database.prepare("UPDATE execution_runs SET thread_id = ? WHERE id = ?").run(threadId, runId);
+    return this.getExecutionRun(runId);
+  }
+
+  finishExecutionRun(runId, status, error = null) {
+    if (!["completed", "failed", "interrupted"].includes(status)) {
+      throw new ApiError(400, "INVALID_FIELD", "Invalid execution finish status");
+    }
+    this.database.prepare(`
+      UPDATE execution_runs
+      SET status = ?, finished_at = ?, error = ?
+      WHERE id = ?
+    `).run(status, now(), error, runId);
+    return this.getExecutionRun(runId);
+  }
+
   getProjectReadme(projectId) {
     if (!this.database.prepare("SELECT 1 FROM projects WHERE id = ?").get(projectId)) {
       throw new ApiError(404, "PROJECT_NOT_FOUND", `Project '${projectId}' does not exist`);
@@ -1935,6 +2173,51 @@ export class TaskboardDatabase {
       WHERE thread_id = ?
       ORDER BY created_at, rowid
     `).all(threadId).map(aiChatEventFromRow);
+  }
+
+  interruptAbandonedExecutionRuns() {
+    const timestamp = now();
+    const runs = this.database.prepare(`
+      SELECT id, task_id, thread_id
+      FROM execution_runs
+      WHERE status IN ('queued', 'running')
+         OR (status = 'interrupted' AND error = 'Taskboard 服务重启，执行已中断')
+    `).all();
+    if (runs.length === 0) return;
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      for (const run of runs) {
+        if (run.thread_id) {
+          const task = this.database.prepare(`
+            SELECT id, status, thread_id, version
+            FROM tasks WHERE id = ?
+          `).get(run.task_id);
+          if (task?.status === "in_progress" && task.thread_id === run.thread_id) {
+            this.database.prepare(`
+              UPDATE tasks
+              SET status = 'todo', version = version + 1, updated_at = ?
+              WHERE id = ? AND version = ?
+            `).run(timestamp, task.id, task.version);
+            this.#recordTaskActivity(task.id, {
+              type: "agent",
+              id: "taskboard",
+              name: "Taskboard",
+              avatarUrl: null,
+            }, [{ field: "status", before: "in_progress", after: "todo" }], timestamp);
+          }
+        }
+        this.database.prepare(`
+          UPDATE execution_runs
+          SET status = 'interrupted', finished_at = ?,
+              error = COALESCE(error, 'Taskboard 服务重启，执行已中断')
+          WHERE id = ? AND status IN ('queued', 'running')
+        `).run(timestamp, run.id);
+      }
+      this.database.exec("COMMIT");
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
   }
 
   interruptAbandonedAiChatRuns() {
