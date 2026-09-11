@@ -34,10 +34,13 @@ test("the web client mutates issue relations with optimistic concurrency", () =>
 });
 
 test("issue details mirror Linear parent, sub-issue, dependency, and related sections", () => {
-  assert.match(detailSource, /<IssueParentLink/);
-  assert.match(detailSource, /<IssueSubIssues/);
+  assert.match(detailSource, /<IssueTaskTree/);
+  assert.doesNotMatch(detailSource, /<IssueParentLink/);
+  assert.doesNotMatch(detailSource, /<IssueSubIssues/);
   assert.match(detailSource, /<IssueRelationSidebar/);
-  assert.match(relationsSource, /\{text\("子议题", "Sub-issues"\)\}/);
+  assert.match(relationsSource, /\{text\("任务层级", "Task hierarchy"\)\}/);
+  assert.match(relationsSource, /function IssueTaskTreeNode/);
+  assert.match(relationsSource, /aria-expanded=\{expanded\}/);
   assert.match(relationsSource, /chineseLabel: "阻塞于",\s+englishLabel: "Blocked by"/);
   assert.match(relationsSource, /chineseLabel: "阻塞",\s+englishLabel: "Blocks"/);
   assert.match(relationsSource, /chineseLabel: "相关议题",\s+englishLabel: "Related issues"/);
@@ -48,7 +51,7 @@ test("issue details mirror Linear parent, sub-issue, dependency, and related sec
   assert.match(relationsSource, /onOpenTask/);
   assert.match(relationsSource, /onRemoveRelation/);
   assert.match(styles, /\.issue-relation-picker/);
-  assert.match(styles, /\.issue-sub-issues/);
+  assert.match(styles, /\.issue-task-tree/);
   assert.match(styles, /\.issue-relation-sidebar/);
 });
 

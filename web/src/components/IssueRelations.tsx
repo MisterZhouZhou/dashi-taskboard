@@ -273,62 +273,109 @@ function IssueRelationRow({
   );
 }
 
-export function IssueParentLink({
+interface IssueTaskTreeNodeProps {
+  task: Task;
+  depth: number;
+  taskById: ReadonlyMap<string, Task>;
+  expandedIds: ReadonlySet<string>;
+  onToggle: (taskId: string) => void;
+  onOpenTask: (task: TaskRelationSummary) => void;
+  onRemoveChild: (child: Task, parentId: string) => void;
+  removingId: string | null;
+  parentId?: string;
+}
+
+function IssueTaskTreeNode({
   task,
-  tasks,
+  depth,
+  taskById,
+  expandedIds,
+  onToggle,
   onOpenTask,
-  onAddRelation,
-  onRemoveRelation,
-}: RelationActions) {
+  onRemoveChild,
+  removingId,
+  parentId,
+}: IssueTaskTreeNodeProps) {
   const { text } = useTaskboardI18n();
-  const [saving, setSaving] = useState(false);
-  const parent = task.relations.parent;
-  const excluded = descendantIds(task, tasks);
-  excluded.add(task.id);
-  const candidates = tasks.filter((candidate) => (
-    candidate.archivedAt === null
-    && !excluded.has(candidate.id)
-    && candidate.id !== parent?.id
-  ));
+  const children = task.relations.subIssues
+    .map((summary) => ({ summary, task: taskById.get(summary.id) }))
+    .filter((item): item is { summary: TaskRelationSummary; task: Task } => Boolean(item.task));
+  const expanded = expandedIds.has(task.id);
 
   return (
-    <div className={`issue-parent-link${parent ? " has-parent" : ""}`}>
-      {parent && (
-        <>
-          <span className="issue-parent-prefix">{text("子议题属于", "Sub-issue of")}</span>
-          <IssueRelationRow
-            issue={parent}
-            removing={saving}
-            onOpen={() => onOpenTask(parent)}
-            onRemove={() => {
-              setSaving(true);
-              void onRemoveRelation(task, "parent", parent.id)
-                .catch(() => undefined)
-                .finally(() => setSaving(false));
-            }}
-          />
-        </>
+    <div className="issue-task-tree-node" style={{ "--issue-tree-depth": depth } as CSSProperties}>
+      <div className="issue-relation-row">
+        {children.length > 0 ? (
+          <button
+            className="issue-task-tree-toggle"
+            type="button"
+            aria-expanded={expanded}
+            aria-label={expanded
+              ? text("收起子任务", "Collapse sub-issues")
+              : text("展开子任务", "Expand sub-issues")}
+            onClick={() => onToggle(task.id)}
+          >
+            <LinearIcon name={expanded ? "chevronDown" : "chevronRight"} />
+          </button>
+        ) : <span className="issue-task-tree-toggle-spacer" aria-hidden="true" />}
+        <button
+          className="issue-relation-target"
+          type="button"
+          onClick={() => onOpenTask({
+            id: task.id,
+            identifier: task.identifier,
+            externalKey: task.externalKey,
+            projectId: task.projectId,
+            title: task.title,
+            status: task.status,
+            priority: task.priority,
+            assignee: task.assignee,
+            archivedAt: task.archivedAt,
+          })}
+        >
+          <StatusIcon status={task.status} size={14} />
+          <span className="issue-relation-id">{task.externalKey ?? task.identifier}</span>
+          <span className="issue-relation-title">{task.title}</span>
+          {depth > 0 && <ActorAvatar actor={task.assignee} className="issue-relation-assignee" />}
+        </button>
+        {depth > 0 && (
+          <button
+            className="issue-relation-remove"
+            type="button"
+            aria-label={text(
+              `移除 ${task.externalKey ?? task.identifier}`,
+              `Remove ${task.externalKey ?? task.identifier}`,
+            )}
+            disabled={removingId === task.id}
+            onClick={() => onRemoveChild(task, parentId ?? "")}
+          >
+            <LinearIcon name="close" />
+          </button>
+        )}
+      </div>
+      {expanded && children.length > 0 && (
+        <div className="issue-task-tree-children">
+          {children.map(({ task: child }) => (
+            <IssueTaskTreeNode
+              key={child.id}
+              task={child}
+              depth={depth + 1}
+              taskById={taskById}
+              expandedIds={expandedIds}
+              onToggle={onToggle}
+              onOpenTask={onOpenTask}
+              onRemoveChild={onRemoveChild}
+              removingId={removingId}
+              parentId={task.id}
+            />
+          ))}
+        </div>
       )}
-      <IssuePicker
-        label={parent
-          ? text("更换父议题", "Change parent issue")
-          : text("设置父议题", "Set parent issue")}
-        candidates={candidates}
-        disabled={saving}
-        onSelect={async (candidate) => {
-          setSaving(true);
-          try {
-            await onAddRelation(task, "parent", candidate.id);
-          } finally {
-            setSaving(false);
-          }
-        }}
-      />
     </div>
   );
 }
 
-export function IssueSubIssues({
+export function IssueTaskTree({
   task,
   tasks,
   onOpenTask,
@@ -336,76 +383,137 @@ export function IssueSubIssues({
   onRemoveRelation,
 }: RelationActions) {
   const { text } = useTaskboardI18n();
-  const [savingId, setSavingId] = useState<string | null>(null);
-  const subIssues = task.relations.subIssues;
-  const done = subIssues.filter((issue) => issue.status === "done").length;
-  const directIds = new Set(subIssues.map((issue) => issue.id));
+  const [savingKey, setSavingKey] = useState<string | null>(null);
+  const taskById = useMemo(() => new Map(tasks.map((candidate) => [candidate.id, candidate])), [tasks]);
+  const descendantTaskIds = useMemo(() => descendantIds(task, tasks), [task, tasks]);
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(() => {
+    const ids = new Set<string>();
+    const queue = [task.id];
+    while (queue.length > 0) {
+      const id = queue.shift()!;
+      if (ids.has(id)) continue;
+      ids.add(id);
+      const child = id === task.id ? task : taskById.get(id);
+      child?.relations.subIssues.forEach((item) => {
+        if (taskById.has(item.id)) queue.push(item.id);
+      });
+    }
+    return ids;
+  });
+  useEffect(() => {
+    setExpandedIds((current) => {
+      const next = new Set(current);
+      next.add(task.id);
+      return next;
+    });
+  }, [task.id]);
+
+  const parent = task.relations.parent;
+  const parentExcluded = new Set(descendantTaskIds);
+  parentExcluded.add(task.id);
+  const parentCandidates = tasks.filter((candidate) => (
+    candidate.archivedAt === null
+    && !parentExcluded.has(candidate.id)
+    && candidate.id !== parent?.id
+  ));
+  const directIds = new Set(task.relations.subIssues.map((item) => item.id));
   const ancestors = new Set<string>([task.id]);
-  let parent = task.relations.parent;
-  const taskById = new Map(tasks.map((candidate) => [candidate.id, candidate]));
-  while (parent && !ancestors.has(parent.id)) {
-    ancestors.add(parent.id);
-    parent = taskById.get(parent.id)?.relations.parent ?? null;
+  let ancestor = parent;
+  while (ancestor && !ancestors.has(ancestor.id)) {
+    ancestors.add(ancestor.id);
+    ancestor = taskById.get(ancestor.id)?.relations.parent ?? null;
   }
-  const candidates = tasks.filter((candidate) => (
+  const childCandidates = tasks.filter((candidate) => (
     candidate.archivedAt === null
     && !ancestors.has(candidate.id)
     && !directIds.has(candidate.id)
   ));
-  const progress = subIssues.length > 0 ? Math.round((done / subIssues.length) * 100) : 0;
 
   return (
-    <section className="issue-sub-issues" aria-labelledby="sub-issues-heading">
-      <header>
-        <div>
-          <h2 id="sub-issues-heading">{text("子议题", "Sub-issues")}</h2>
-          {subIssues.length > 0 && (
-            <span className="sub-issue-summary">
-              <span
-                className="sub-issue-progress"
-                style={{ "--sub-issue-progress": `${progress}%` } as CSSProperties}
-                aria-hidden="true"
-              />
-              {done}/{subIssues.length}
-            </span>
-          )}
-        </div>
+    <section className="issue-task-tree" aria-labelledby="task-tree-heading">
+      <header className="issue-task-tree-header">
+        <h2 id="task-tree-heading">{text("任务层级", "Task hierarchy")}</h2>
         <IssuePicker
-          label={text("添加子议题", "Add sub-issue")}
-          candidates={candidates}
-          disabled={savingId !== null}
+          label={text("添加子任务", "Add sub-issue")}
+          candidates={childCandidates}
+          disabled={savingKey !== null}
           onSelect={async (candidate) => {
-            setSavingId(candidate.id);
+            setSavingKey(candidate.id);
             try {
               await onAddRelation(candidate, "parent", task.id);
             } finally {
-              setSavingId(null);
+              setSavingKey(null);
             }
           }}
         />
       </header>
-      {subIssues.length > 0 && (
-        <div className="issue-sub-issue-list">
-          {subIssues.map((issue) => {
-            const child = taskById.get(issue.id);
-            return (
-              <IssueRelationRow
-                issue={issue}
-                key={issue.id}
-                showAssignee
-                removing={savingId === issue.id}
-                onOpen={() => onOpenTask(issue)}
-                onRemove={() => {
-                  if (!child) return;
-                  setSavingId(issue.id);
-                  void onRemoveRelation(child, "parent", task.id)
-                    .catch(() => undefined)
-                    .finally(() => setSavingId(null));
-                }}
-              />
-            );
-          })}
+      {parent && (
+        <div className="issue-task-tree-parent">
+          <span>{text("父任务", "Parent task")}</span>
+          <IssueRelationRow
+            issue={parent}
+            removing={savingKey === "parent"}
+            onOpen={() => onOpenTask(parent)}
+            onRemove={() => {
+              setSavingKey("parent");
+              void onRemoveRelation(task, "parent", parent.id)
+                .catch(() => undefined)
+                .finally(() => setSavingKey(null));
+            }}
+          />
         </div>
+      )}
+      <div className="issue-task-tree-list">
+        <IssueTaskTreeNode
+          task={task}
+          depth={0}
+          taskById={taskById}
+          expandedIds={expandedIds}
+          onToggle={(taskId) => setExpandedIds((current) => {
+            const next = new Set(current);
+            if (next.has(taskId)) next.delete(taskId); else next.add(taskId);
+            return next;
+          })}
+          onOpenTask={onOpenTask}
+          onRemoveChild={(child, parentId) => {
+            if (!parentId) return;
+            setSavingKey(child.id);
+            void onRemoveRelation(child, "parent", parentId)
+              .catch(() => undefined)
+              .finally(() => setSavingKey(null));
+          }}
+          removingId={savingKey}
+        />
+      </div>
+      {!parent && (
+        <IssuePicker
+          label={text("设置父任务", "Set parent task")}
+          candidates={parentCandidates}
+          disabled={savingKey !== null}
+          onSelect={async (candidate) => {
+            setSavingKey("parent");
+            try {
+              await onAddRelation(task, "parent", candidate.id);
+            } finally {
+              setSavingKey(null);
+            }
+          }}
+        />
+      )}
+      {parent && (
+        <IssuePicker
+          label={text("更换父任务", "Change parent task")}
+          candidates={parentCandidates}
+          disabled={savingKey !== null}
+          onSelect={async (candidate) => {
+            setSavingKey("parent");
+            try {
+              await onAddRelation(task, "parent", candidate.id);
+            } finally {
+              setSavingKey(null);
+            }
+          }}
+        />
       )}
     </section>
   );

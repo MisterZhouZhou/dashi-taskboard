@@ -12233,3 +12233,113 @@ kbd {
 .project-automation-custom-interval .project-automation-error {
   margin: 0 0 0 2px;
 }
+
+.issue-task-tree {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: var(--border-hairline) solid var(--border);
+}
+
+.issue-task-tree-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 28px;
+  margin-bottom: 7px;
+}
+
+.issue-task-tree-header h2 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 560;
+  line-height: 20px;
+}
+
+.issue-task-tree-parent {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 8px;
+  margin-bottom: 7px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+
+.issue-task-tree-parent .issue-relation-row {
+  min-width: 0;
+  flex: 1;
+}
+
+.issue-task-tree-list {
+  overflow: hidden;
+  border: var(--border-hairline) solid var(--border);
+  border-radius: 7px;
+  background: var(--surface);
+}
+
+.issue-task-tree-node {
+  position: relative;
+  padding-left: calc(var(--issue-tree-depth, 0) * 20px);
+}
+
+.issue-task-tree-node + .issue-task-tree-node,
+.issue-task-tree-children > .issue-task-tree-node {
+  border-top: var(--border-hairline) solid var(--border);
+}
+
+.issue-task-tree-node .issue-relation-row {
+  min-height: 34px;
+}
+
+.issue-task-tree-node .issue-relation-target {
+  height: 34px;
+}
+
+.issue-task-tree-toggle,
+.issue-task-tree-toggle-spacer {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  margin-left: 3px;
+}
+
+.issue-task-tree-toggle {
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-tertiary);
+}
+
+.issue-task-tree-toggle:hover {
+  background: var(--surface-active);
+  color: var(--text-primary);
+}
+
+.issue-task-tree-toggle svg {
+  width: 13px;
+  height: 13px;
+}
+
+.issue-task-tree-toggle-spacer {
+  width: 24px;
+}
+
+.issue-task-tree-node .issue-relation-remove {
+  margin-right: 3px;
+}
+
+.issue-task-tree-node .actor-avatar.issue-relation-assignee {
+  width: 11px;
+  height: 11px;
+  margin-left: auto;
+  border-width: 1px;
+  font-size: 5px;
+}
+
+.issue-task-tree > .issue-relation-picker:last-child {
+  margin-top: 7px;
+}

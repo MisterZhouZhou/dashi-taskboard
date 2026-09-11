@@ -733,6 +733,8 @@ function LocalRealtimeSync({
   return null;
 }
 
+const DETAIL_HISTORY_DEPTH_KEY = "taskboardDetailDepth";
+
 export function App() {
   const query = useMemo(() => new URL(document.baseURI).searchParams, []);
   const host = query.get("host");
@@ -864,6 +866,11 @@ export function App() {
   const issueListRef = useRef<HTMLDivElement>(null);
   const boardColumnScrollRefs = useRef<Partial<Record<TaskStatus, HTMLDivElement | null>>>({});
   const detailSourceProjectIdRef = useRef<string | null>(null);
+  const detailHistoryDepthRef = useRef<number>(
+    typeof window.history.state?.[DETAIL_HISTORY_DEPTH_KEY] === "number"
+      ? window.history.state[DETAIL_HISTORY_DEPTH_KEY]
+      : 0,
+  );
   const pendingDetailSourceScrollRef = useRef<DetailSourceScroll | null>(null);
   const taskScopeProjectId = detailSourceProjectIdRef.current ?? selectedProjectId;
   const taskScopeProjectIdRef = useRef(taskScopeProjectId);
@@ -1616,6 +1623,9 @@ export function App() {
     const fullTask = tasksRef.current.find((candidate) => candidate.identifier === task.identifier);
     if (fullTask) markTaskRead(fullTask);
     const currentIssue = readIssueIdentifier(window.location.search);
+    const currentDepth = typeof window.history.state?.[DETAIL_HISTORY_DEPTH_KEY] === "number"
+      ? window.history.state[DETAIL_HISTORY_DEPTH_KEY]
+      : detailHistoryDepthRef.current;
     if (!currentIssue) detailSourceProjectIdRef.current = selectedProjectId;
     if (isAllProjects) setSelectedProjectId(task.projectId);
     if (boardView === "list" && issueListRef.current) {
@@ -1640,20 +1650,37 @@ export function App() {
     setDetailTaskIdentifier(task.identifier);
     const boardUrl = buildIssueUrl(window.location.href, selectedProjectId, null);
     if (!currentIssue) {
-      window.history.replaceState(window.history.state, "", boardUrl);
+      detailHistoryDepthRef.current = 0;
+      window.history.replaceState({
+        ...(window.history.state ?? {}),
+        [DETAIL_HISTORY_DEPTH_KEY]: 0,
+      }, "", boardUrl);
     }
+    const nextDepth = currentIssue ? currentDepth + 1 : 1;
+    detailHistoryDepthRef.current = nextDepth;
     const detailUrl = buildIssueUrl(
       currentIssue ? window.location.href : boardUrl.href,
       task.projectId,
       task.identifier,
     );
-    window.history.pushState(window.history.state, "", detailUrl);
+    window.history.pushState({
+      ...(window.history.state ?? {}),
+      [DETAIL_HISTORY_DEPTH_KEY]: nextDepth,
+    }, "", detailUrl);
   }
 
   function closeTaskDetail() {
+    const currentDepth = typeof window.history.state?.[DETAIL_HISTORY_DEPTH_KEY] === "number"
+      ? window.history.state[DETAIL_HISTORY_DEPTH_KEY]
+      : detailHistoryDepthRef.current;
+    if (currentDepth > 1) {
+      window.history.back();
+      return;
+    }
     const sourceProjectId = detailSourceProjectIdRef.current ?? selectedProjectId;
     detailSourceProjectIdRef.current = null;
     setDetailTaskIdentifier(null);
+    detailHistoryDepthRef.current = 0;
     if (sourceProjectId !== selectedProjectId) {
       setSelectedProjectId(sourceProjectId);
       setBoardView(sourceProjectId === ALL_PROJECTS_ID ? "issues" : readProjectBoardView(sourceProjectId));
@@ -1705,6 +1732,11 @@ export function App() {
           };
         }
       }
+      detailHistoryDepthRef.current = routeIssueIdentifier
+        ? (typeof window.history.state?.[DETAIL_HISTORY_DEPTH_KEY] === "number"
+          ? window.history.state[DETAIL_HISTORY_DEPTH_KEY]
+          : 0)
+        : 0;
       if (!routeIssueIdentifier) detailSourceProjectIdRef.current = null;
       setDetailTaskIdentifier(routeIssueIdentifier);
       if (routeProjectId === selectedProjectId) return;

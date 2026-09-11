@@ -90,9 +90,8 @@ import {
   type InlineMediaSegment,
 } from "./InlineMediaComposer";
 import {
-  IssueParentLink,
   IssueRelationSidebar,
-  IssueSubIssues,
+  IssueTaskTree,
   type RelationMutationResult,
 } from "./IssueRelations";
 import { TaskPropertyPicker } from "./TaskPropertyPicker";
@@ -1101,17 +1100,6 @@ export function TaskDetail({
                   onKeyDown={handleTitleKeyDown}
                   onBlur={() => void saveTitle()}
                 />
-                <IssueParentLink
-                  task={currentTask}
-                  tasks={tasks}
-                  onOpenTask={onOpenTask}
-                  onAddRelation={(anchor, type, relatedTaskId) => applyRelationMutation(
-                    () => onAddRelation(anchor, type, relatedTaskId),
-                  )}
-                  onRemoveRelation={(anchor, type, relatedTaskId) => applyRelationMutation(
-                    () => onRemoveRelation(anchor, type, relatedTaskId),
-                  )}
-                />
                 {editingDescription ? (
                   <div
                     className="issue-description-composer"
@@ -1271,7 +1259,7 @@ export function TaskDetail({
               )}
             </article>
 
-            <IssueSubIssues
+            <IssueTaskTree
               task={currentTask}
               tasks={tasks}
               onOpenTask={onOpenTask}
