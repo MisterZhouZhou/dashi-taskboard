@@ -385,7 +385,6 @@ export function IssueTaskTree({
   const { text } = useTaskboardI18n();
   const [savingKey, setSavingKey] = useState<string | null>(null);
   const taskById = useMemo(() => new Map(tasks.map((candidate) => [candidate.id, candidate])), [tasks]);
-  const descendantTaskIds = useMemo(() => descendantIds(task, tasks), [task, tasks]);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(() => {
     const ids = new Set<string>();
     const queue = [task.id];
@@ -409,13 +408,6 @@ export function IssueTaskTree({
   }, [task.id]);
 
   const parent = task.relations.parent;
-  const parentExcluded = new Set(descendantTaskIds);
-  parentExcluded.add(task.id);
-  const parentCandidates = tasks.filter((candidate) => (
-    candidate.archivedAt === null
-    && !parentExcluded.has(candidate.id)
-    && candidate.id !== parent?.id
-  ));
   const directIds = new Set(task.relations.subIssues.map((item) => item.id));
   const ancestors = new Set<string>([task.id]);
   let ancestor = parent;
@@ -447,22 +439,6 @@ export function IssueTaskTree({
           }}
         />
       </header>
-      {parent && (
-        <div className="issue-task-tree-parent">
-          <span>{text("父任务", "Parent task")}</span>
-          <IssueRelationRow
-            issue={parent}
-            removing={savingKey === "parent"}
-            onOpen={() => onOpenTask(parent)}
-            onRemove={() => {
-              setSavingKey("parent");
-              void onRemoveRelation(task, "parent", parent.id)
-                .catch(() => undefined)
-                .finally(() => setSavingKey(null));
-            }}
-          />
-        </div>
-      )}
       <div className="issue-task-tree-list">
         <IssueTaskTreeNode
           task={task}
@@ -485,36 +461,6 @@ export function IssueTaskTree({
           removingId={savingKey}
         />
       </div>
-      {!parent && (
-        <IssuePicker
-          label={text("设置父任务", "Set parent task")}
-          candidates={parentCandidates}
-          disabled={savingKey !== null}
-          onSelect={async (candidate) => {
-            setSavingKey("parent");
-            try {
-              await onAddRelation(task, "parent", candidate.id);
-            } finally {
-              setSavingKey(null);
-            }
-          }}
-        />
-      )}
-      {parent && (
-        <IssuePicker
-          label={text("更换父任务", "Change parent task")}
-          candidates={parentCandidates}
-          disabled={savingKey !== null}
-          onSelect={async (candidate) => {
-            setSavingKey("parent");
-            try {
-              await onAddRelation(task, "parent", candidate.id);
-            } finally {
-              setSavingKey(null);
-            }
-          }}
-        />
-      )}
     </section>
   );
 }
