@@ -14,7 +14,11 @@ import type {
 
 type AutomationStatus = "ACTIVE" | "PAUSED";
 type AutomationQuotaState = "available" | "blocked" | "unknown" | "unavailable";
-type IntervalMinutes = 5 | 10 | 15 | 30 | 60;
+type IntervalMinutes = number;
+const INTERVAL_PRESETS = [5, 10, 15, 30, 60] as const;
+const MIN_INTERVAL_MINUTES = 1;
+const MAX_INTERVAL_MINUTES = 1_440;
+
 
 interface AutomationOptions {
   enabledByUser: boolean;
@@ -75,6 +79,10 @@ const EFFORT_LABELS: Record<string, readonly [string, string]> = {
   ultra: ["极高 (ultra)", "Ultra"],
 };
 
+function isPresetInterval(value: number): boolean {
+  return INTERVAL_PRESETS.includes(value as (typeof INTERVAL_PRESETS)[number]);
+}
+
 function automationOptions(
   models: AiChatModel[],
   executor: AutoClaimExecutor,
@@ -110,12 +118,6 @@ const EXECUTOR_LABELS: Record<AutoClaimExecutor, readonly [string, string]> = {
   "claude-code": ["Claude Code CLI", "Claude Code CLI"],
 };
 
-/** Short form for the trigger and the last-run line, where the row label is absent. */
-const AGENT_SHORT_LABELS: Record<string, readonly [string, string]> = {
-  codex: ["Codex", "Codex"],
-  "claude-code": ["Claude Code", "Claude Code"],
-};
-
 const SANDBOX_LABELS: Record<AutoClaimSandbox, readonly [string, string]> = {
   "read-only": ["只读（不改文件）", "Read-only"],
   "workspace-write": ["可改工作目录", "Workspace write"],
@@ -142,6 +144,9 @@ export function ProjectAutomationMenu({
     "executor" | "interval" | "model" | "reasoning" | "sandbox" | null
   >(null);
   const [position, setPosition] = useState({ left: 0, top: 0, ready: false });
+  const [customInterval, setCustomInterval] = useState("");
+  const [customIntervalMode, setCustomIntervalMode] = useState(false);
+  const [customIntervalError, setCustomIntervalError] = useState<string | null>(null);
   const [draft, setDraft] = useState<AutomationDraft>(
     () => automationOptions(models, executor, automation, autoClaim),
   );
@@ -174,7 +179,11 @@ export function ProjectAutomationMenu({
 
   useEffect(() => {
     if (!open) return;
-    setDraft(automationOptions(models, executor, automation, autoClaim));
+    const next = automationOptions(models, executor, automation, autoClaim);
+    setDraft(next);
+    setCustomInterval(String(next.intervalMinutes));
+    setCustomIntervalMode(!isPresetInterval(next.intervalMinutes));
+    setCustomIntervalError(null);
   }, [autoClaim, automation, executor, models, open]);
 
   useEffect(() => {
@@ -183,7 +192,10 @@ export function ProjectAutomationMenu({
 
   useEffect(() => {
     if (wasPendingRef.current && !pending) {
-      setDraft(automationOptions(models, executor, automation, autoClaim));
+      const next = automationOptions(models, executor, automation, autoClaim);
+      setDraft(next);
+      setCustomInterval(String(next.intervalMinutes));
+      setCustomIntervalError(null);
     }
     wasPendingRef.current = pending;
   }, [autoClaim, automation, executor, pending]);
@@ -226,6 +238,22 @@ export function ProjectAutomationMenu({
       window.removeEventListener("scroll", closeFromViewportChange, true);
     };
   }, [open, pickerMenu]);
+
+  const commitCustomInterval = () => {
+    const value = customInterval.trim();
+    if (!/^\d+$/.test(value)) {
+      setCustomIntervalError(text("请输入整数分钟", "Enter a whole number of minutes"));
+      return;
+    }
+    const minutes = Number(value);
+    if (!Number.isSafeInteger(minutes) || minutes < MIN_INTERVAL_MINUTES || minutes > MAX_INTERVAL_MINUTES) {
+      setCustomIntervalError(text("请输入 1～1440 之间的整数分钟", "Enter an integer from 1 to 1440 minutes"));
+      return;
+    }
+    setCustomIntervalError(null);
+    setCustomIntervalMode(true);
+    submitChange({ ...draft, intervalMinutes: minutes });
+  };
 
   const submitChange = (next: AutomationDraft) => {
     if (pending) return;
@@ -339,24 +367,67 @@ export function ProjectAutomationMenu({
       <div className="project-automation-field">
         <span>{text("间隔", "Interval")}</span>
         <TaskPropertyPicker
-          value={String(draft.intervalMinutes)}
-          options={[5, 10, 15, 30, 60].map((minutes) => ({
-            value: String(minutes),
-            label: text(`${minutes} 分钟`, `${minutes} min`),
-            icon: <RecurrenceIcon color="currentColor" size={14} />,
-          }))}
+          value={isPresetInterval(draft.intervalMinutes) ? String(draft.intervalMinutes) : "custom"}
+          options={[
+            ...INTERVAL_PRESETS.map((minutes) => ({
+              value: String(minutes),
+              label: text(`${minutes} 分钟`, `${minutes} min`),
+              icon: <RecurrenceIcon color="currentColor" size={14} />,
+            })),
+            {
+              value: "custom",
+              label: isPresetInterval(draft.intervalMinutes)
+                ? text("自定义", "Custom")
+                : text(`${draft.intervalMinutes} 分钟（自定义）`, `${draft.intervalMinutes} min (custom)`),
+              icon: <RecurrenceIcon color="currentColor" size={14} />,
+            },
+          ]}
           open={pickerMenu === "interval"}
           disabled={disabled}
           className="project-automation-picker"
           triggerClassName="project-automation-picker-trigger"
           ariaLabel={text("间隔", "Interval")}
           onOpenChange={(open) => setPickerMenu(open ? "interval" : null)}
-          onChange={(value) => submitChange({
-            ...draft,
-            intervalMinutes: Number(value) as IntervalMinutes,
-          })}
+          onChange={(value) => {
+            if (value === "custom") {
+              setCustomInterval(String(draft.intervalMinutes));
+              setCustomIntervalMode(true);
+              setCustomIntervalError(null);
+              return;
+            }
+            setCustomIntervalMode(false);
+            setCustomIntervalError(null);
+            submitChange({ ...draft, intervalMinutes: Number(value) });
+          }}
         />
       </div>
+      {(customIntervalMode || !isPresetInterval(draft.intervalMinutes)) && (
+        <div className="project-automation-custom-interval">
+          <div className="project-automation-field">
+            <span>{text("自定义分钟数", "Custom minutes")}</span>
+            <div className="project-automation-custom-interval-controls">
+              <input
+                type="number"
+                min={MIN_INTERVAL_MINUTES}
+                max={MAX_INTERVAL_MINUTES}
+                step={1}
+                value={customInterval}
+                disabled={disabled}
+                onChange={(event) => setCustomInterval(event.target.value)}
+                onBlur={commitCustomInterval}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    commitCustomInterval();
+                  }
+                }}
+              />
+              <span className="project-automation-custom-interval-unit">{text("分钟", "min")}</span>
+            </div>
+          </div>
+          {customIntervalError && <p className="project-automation-error">{customIntervalError}</p>}
+        </div>
+      )}
       {!native && (
         <div className="project-automation-field">
           <span>{text("权限", "Permission")}</span>
@@ -495,32 +566,6 @@ export function ProjectAutomationMenu({
             />
           </div>
         </>
-      )}
-      {!native && autoClaim?.lastIssue && (
-        <p className="project-automation-note">
-          {(() => {
-            const ran = autoClaim.lastAgent
-              ? text(...AGENT_SHORT_LABELS[autoClaim.lastAgent])
-              : null;
-            const who = ran ? `${ran} ` : "";
-            if (autoClaim.lastOutcome === "running") {
-              return text(
-                `${who}正在处理 ${autoClaim.lastIssue}`,
-                `${who}is working on ${autoClaim.lastIssue}`,
-              );
-            }
-            if (autoClaim.lastOutcome === "failed") {
-              return text(
-                `上一轮 ${who}处理 ${autoClaim.lastIssue} 失败：${autoClaim.lastError ?? ""}`,
-                `Last run: ${who}failed on ${autoClaim.lastIssue} — ${autoClaim.lastError ?? ""}`,
-              );
-            }
-            return text(
-              `上一轮 ${who}已完成 ${autoClaim.lastIssue}`,
-              `Last run: ${who}completed ${autoClaim.lastIssue}`,
-            );
-          })()}
-        </p>
       )}
       {unavailableReason && <p className="project-automation-note">{unavailableReason}</p>}
       {error && error !== unavailableReason && <p className="project-automation-error" role="alert">{error}</p>}

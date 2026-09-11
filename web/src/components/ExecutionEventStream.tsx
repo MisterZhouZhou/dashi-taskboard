@@ -152,7 +152,7 @@ export function ExecutionEventStream({ taskId, runId = null, compact = false, hi
             <strong>{activeRun.agent === "claude-code" ? "Claude Code" : "Codex CLI"}</strong>
             <span>{text(activeRun.source === "manual" ? "手动执行" : "自动认领", activeRun.source === "manual" ? "Manual" : "Auto-claim")}</span>
           </div>
-          <span className={`execution-status is-${activeRun.status}`}>{runStatusLabel(activeRun, text)}</span>
+          <span className={`execution-status-tag is-${activeRun.status}`}>{runStatusLabel(activeRun, text)}</span>
         </header>
       )}
       <div className="execution-event-list">

@@ -174,6 +174,35 @@ export class ExecutionService {
     return finalRun;
   }
 
+  summaryForTask(taskId) {
+    const run = this.database.listExecutionRuns({ taskId, limit: 20 })
+      .find((candidate) => candidate.status !== "running" && candidate.status !== "queued");
+    if (!run) return null;
+    const events = this.database.listExecutionEvents(run.id);
+    const finalAgentMessage = [...events]
+      .reverse()
+      .find((event) => event.role === "agent" && event.content.trim())?.content.trim() ?? "";
+    const commands = [...new Set(events
+      .filter((event) => event.type === "command_completed" && event.command)
+      .map((event) => event.command.trim())
+      .filter(Boolean))].slice(-6);
+    const files = [...new Set(events.flatMap((event) => event.files ?? []))].slice(-30);
+    const error = run.error
+      || [...events].reverse().find((event) => event.type === "error" || event.type === "run_failed")?.content.trim()
+      || "";
+    return [
+      "上一轮执行摘要（仅供参考；请以当前任务、最新评论和工作目录为准）：",
+      `执行器：${run.agent === "claude-code" ? "Claude Code CLI" : "Codex CLI"}`,
+      `来源：${run.source === "manual" ? "手动执行" : "自动认领"}`,
+      `结果：${run.status}`,
+      ...(commands.length > 0 ? ["上一轮完成的命令：", ...commands.map((command) => `- ${command}`)] : []),
+      ...(files.length > 0 ? ["上一轮涉及的文件：", ...files.map((file) => `- ${file}`)] : []),
+      ...(finalAgentMessage ? ["上一轮 Agent 最终反馈：", finalAgentMessage.slice(0, 8_000)] : []),
+      ...(error ? [`上一轮错误：${error.slice(0, 2_000)}`] : []),
+      "不要假设上一轮结果仍然有效；重新检查当前任务和工作目录。",
+    ].join("\n");
+  }
+
   listRuns(filters) {
     return this.database.listExecutionRuns(filters);
   }

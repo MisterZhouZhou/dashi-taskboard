@@ -897,7 +897,8 @@ function parseTaskTreeQuery(searchParams) {
   return { direction, depth };
 }
 
-const AUTO_CLAIM_INTERVALS = new Set([5, 10, 15, 30, 60]);
+const AUTO_CLAIM_INTERVAL_MINUTES = 1;
+const AUTO_CLAIM_INTERVAL_MAX_MINUTES = 1_440;
 // 'danger-full-access' is absent on purpose: it requires per-turn human
 // confirmation, which an unattended background turn cannot provide.
 const AUTO_CLAIM_SANDBOXES = new Set(["read-only", "workspace-write"]);
@@ -921,8 +922,12 @@ function parseAutoClaimSettings(body) {
     settings.agent = body.agent;
   }
   if (Object.hasOwn(body, "intervalMinutes")) {
-    if (!AUTO_CLAIM_INTERVALS.has(body.intervalMinutes)) {
-      throw new ApiError(400, "INVALID_FIELD", "'intervalMinutes' must be 5, 10, 15, 30, or 60");
+    if (
+      !Number.isSafeInteger(body.intervalMinutes)
+      || body.intervalMinutes < AUTO_CLAIM_INTERVAL_MINUTES
+      || body.intervalMinutes > AUTO_CLAIM_INTERVAL_MAX_MINUTES
+    ) {
+      throw new ApiError(400, "INVALID_FIELD", "'intervalMinutes' must be an integer from 1 to 1440");
     }
     settings.intervalMinutes = body.intervalMinutes;
   }

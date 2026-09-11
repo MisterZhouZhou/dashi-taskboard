@@ -12153,3 +12153,83 @@ kbd {
   -webkit-user-select: text;
   user-select: text;
 }
+
+.execution-status-tag {
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  min-height: 20px;
+  padding: 2px 7px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font-size: 10px !important;
+  font-weight: 500;
+  line-height: 14px;
+  white-space: nowrap;
+}
+
+.execution-status-tag.is-running {
+  border-color: color-mix(in srgb, var(--accent) 24%, transparent);
+  background: var(--accent-soft);
+  color: var(--accent) !important;
+}
+
+.execution-status-tag.is-completed {
+  border-color: color-mix(in srgb, var(--success) 28%, transparent);
+  background: color-mix(in srgb, var(--success) 12%, transparent);
+  color: var(--success) !important;
+}
+
+.execution-status-tag.is-failed {
+  border-color: color-mix(in srgb, var(--danger) 28%, transparent);
+  background: var(--danger-soft);
+  color: var(--danger) !important;
+}
+
+.execution-status-tag.is-interrupted,
+.execution-status-tag.is-queued {
+  border-color: color-mix(in srgb, var(--text-tertiary) 24%, transparent);
+  background: color-mix(in srgb, var(--text-tertiary) 10%, transparent);
+  color: var(--text-tertiary) !important;
+}
+
+.execution-center-header .execution-status-tag {
+  margin-top: 0;
+}
+
+.project-automation-custom-interval {
+  margin-top: -4px;
+}
+
+.project-automation-custom-interval-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.project-automation-custom-interval input {
+  width: 84px;
+  height: 26px;
+  padding: 0 7px;
+  border: var(--border-hairline) solid var(--border-strong);
+  border-radius: 5px;
+  outline: 0;
+  background: var(--surface);
+  color: var(--text-primary);
+  font-size: 11px;
+  text-align: right;
+}
+
+.project-automation-custom-interval input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.project-automation-custom-interval-unit {
+  color: var(--text-tertiary);
+  font-size: 10px;
+}
+
+.project-automation-custom-interval .project-automation-error {
+  margin: 0 0 0 2px;
+}

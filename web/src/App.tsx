@@ -215,7 +215,7 @@ interface UndoNotice {
 
 type ProjectAutomationStatus = "ACTIVE" | "PAUSED";
 type AutomationQuotaState = "available" | "blocked" | "unknown" | "unavailable";
-type AutomationIntervalMinutes = 5 | 10 | 15 | 30 | 60;
+type AutomationIntervalMinutes = number;
 
 interface AutomationQuotaStatus {
   state: AutomationQuotaState;
@@ -549,12 +549,14 @@ function isAutomationHostPolicy(
 }
 
 function isAutomationIntervalMinutes(value: unknown): value is AutomationIntervalMinutes {
-  return value === 5 || value === 10 || value === 15 || value === 30 || value === 60;
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 1 && value <= 1_440;
 }
 
 function intervalMinutesFromRrule(value: string): AutomationIntervalMinutes | null {
-  const match = /^RRULE:FREQ=MINUTELY;INTERVAL=(5|10|15|30|60)$/.exec(value);
-  return match ? Number(match[1]) as AutomationIntervalMinutes : null;
+  const match = /^RRULE:FREQ=MINUTELY;INTERVAL=(\d+)$/.exec(value);
+  if (!match) return null;
+  const minutes = Number(match[1]);
+  return isAutomationIntervalMinutes(minutes) ? minutes : null;
 }
 
 function isAutomationHostItem(value: unknown): value is AutomationHostItem {

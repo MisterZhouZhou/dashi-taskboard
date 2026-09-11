@@ -25,15 +25,14 @@ function workspaceDirectoryExists(workspacePath) {
 }
 
 /**
- * An issue is eligible when nobody owns it yet and nothing it depends on is
- * still open. Anything already carrying a thread id belongs to a conversation
- * that must be allowed to finish or be re-dispatched by a human.
+ * An issue is eligible when it is waiting to be claimed and nothing it depends
+ * on is still open. A previous thread binding is history, not an active-run lock;
+ * a successful claim writes the new binding with the task version check.
  */
 export function eligibleIssue(tasks) {
   const byId = new Map(tasks.map((task) => [task.id, task]));
   return tasks.find((task) => {
     if (task.status !== "todo" || task.archivedAt != null) return false;
-    if (task.threadId || task.threadBinding) return false;
     return (task.relations?.blockedBy ?? []).every((dependency) => {
       const blocker = byId.get(dependency.id);
       return blocker ? blocker.status === "done" : true;
@@ -71,6 +70,7 @@ export function buildAutoClaimPrompt({
   taskctl,
   threadIdToken,
   manualRedispatch = false,
+  previousExecutionSummary = null,
 }) {
   return [
     `你是任务面板的自动认领 worker，本轮只处理议题 ${issue.identifier}，处理完即停止。`,
@@ -85,6 +85,7 @@ export function buildAutoClaimPrompt({
       "议题中现有的 threadId/threadBinding 是上一轮历史记录；认领时用本轮完整 binding 覆盖上一轮会话绑定。",
       "",
     ] : []),
+    ...(previousExecutionSummary ? [previousExecutionSummary, ""] : []),
     "严格按顺序执行，每一步用给出的精确命令形式，不要自行探索参数：",
     "",
     `1. 读取议题与全部评论：`,
@@ -251,6 +252,7 @@ export class AutoClaimService {
 
       // The project setting is the default; the issue's own executor wins when set.
       const agent = issue.executor ?? settings.agent;
+      const previousExecutionSummary = this.execution?.summaryForTask(issue.id) ?? null;
       executionRun = this.execution?.createRun({
         projectId,
         taskId: issue.id,
@@ -275,6 +277,7 @@ export class AutoClaimService {
         taskctl: buildTaskctlCommand({}),
         threadIdToken: agentThreadIdToken(agent, sessionId),
         manualRedispatch: Boolean(issueId && (issue.threadId || issue.threadBinding)),
+        previousExecutionSummary,
       });
 
       this.database.recordProjectAutoClaimStart(projectId, issue.identifier, agent);

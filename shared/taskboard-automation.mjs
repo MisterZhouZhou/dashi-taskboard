@@ -4,7 +4,8 @@ import { fileURLToPath } from "node:url";
 const taskctlCliPath = fileURLToPath(new URL("../cli/taskctl.mjs", import.meta.url));
 
 const AUTOMATION_OPERATIONS = new Set(["ensure-active", "pause", "list", "apply-policy"]);
-const INTERVAL_MINUTES = new Set([5, 10, 15, 30, 60]);
+const MIN_INTERVAL_MINUTES = 1;
+const MAX_INTERVAL_MINUTES = 1_440;
 const HOST_REQUEST_FIELDS = new Set([
   "id",
   "action",
@@ -61,7 +62,11 @@ export function parseTaskboardAutomationHostRequest(value) {
     ))
     || (codexProjectKind === "local" && remoteProjects.length > 0)
   ) return null;
-  if (!INTERVAL_MINUTES.has(value.intervalMinutes)) return null;
+  if (
+    !Number.isSafeInteger(value.intervalMinutes)
+    || value.intervalMinutes < MIN_INTERVAL_MINUTES
+    || value.intervalMinutes > MAX_INTERVAL_MINUTES
+  ) return null;
   if (!validText(value.model, 256) || !validText(value.reasoningEffort, 100)) return null;
   if (value.automationId !== undefined && !validText(value.automationId, 256)) return null;
   if (typeof value.enabledByUser !== "boolean" || typeof value.quotaAware !== "boolean") return null;

@@ -7,6 +7,16 @@ import { useTaskboardI18n } from "../i18n";
 import type { ExecutionRun } from "../types";
 import { ExecutionEventStream } from "./ExecutionEventStream";
 
+function statusLabel(run: ExecutionRun, text: (zh: string, en: string) => string): string {
+  switch (run.status) {
+    case "running": return text("进行中", "Running");
+    case "completed": return text("已完成", "Completed");
+    case "failed": return text("失败", "Failed");
+    case "interrupted": return text("已中断", "Interrupted");
+    default: return text("排队中", "Queued");
+  }
+}
+
 function sortRuns(runs: ExecutionRun[]): ExecutionRun[] {
   return [...runs].sort((left, right) => {
     const leftRunning = left.status === "running" ? 0 : 1;
@@ -102,7 +112,7 @@ export function ExecutionCenter({ open, onOpenChange, onOpenTask }: ExecutionCen
                 {runs.map((run) => (
                   <article className={`execution-run-card is-${run.status}`} key={run.id}>
                     <button type="button" className="execution-run-open" onClick={() => setSelectedRunId(run.id)}>
-                      <div className="execution-run-card-heading"><strong>{run.taskIdentifier}</strong><span>{run.status === "running" ? text("执行中", "Running") : run.status === "completed" ? text("已完成", "Completed") : run.status === "failed" ? text("失败", "Failed") : text("已中断", "Interrupted")}</span></div>
+                      <div className="execution-run-card-heading"><strong>{run.taskIdentifier}</strong><span className={`execution-status-tag is-${run.status}`}>{statusLabel(run, text)}</span></div>
                       <div className="execution-run-card-title">{run.taskTitle}</div>
                       <div className="execution-run-card-meta">{run.projectName} · {run.agent === "claude-code" ? "Claude Code" : "Codex CLI"} · {run.source === "manual" ? text("手动执行", "Manual") : text("自动认领", "Auto-claim")}</div>
                       {run.lastEventSummary && <div className="execution-run-card-summary">{run.lastEventSummary}</div>}
