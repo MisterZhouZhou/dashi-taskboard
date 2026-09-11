@@ -298,6 +298,7 @@ function IssueTaskTreeNode({
 }: IssueTaskTreeNodeProps) {
   const { text } = useTaskboardI18n();
   const children = task.relations.subIssues
+    .filter((summary) => summary.id !== task.id)
     .map((summary) => ({ summary, task: taskById.get(summary.id) }))
     .filter((item): item is { summary: TaskRelationSummary; task: Task } => Boolean(item.task));
   const expanded = expandedIds.has(task.id);

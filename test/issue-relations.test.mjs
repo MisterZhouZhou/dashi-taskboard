@@ -40,6 +40,7 @@ test("issue details mirror Linear parent, sub-issue, dependency, and related sec
   assert.match(detailSource, /<IssueRelationSidebar/);
   assert.match(relationsSource, /\{text\("任务层级", "Task hierarchy"\)\}/);
   assert.match(relationsSource, /function IssueTaskTreeNode/);
+  assert.match(relationsSource, /filter\(\(summary\) => summary\.id !== task\.id\)/);
   assert.doesNotMatch(relationsSource, /Parent task/);
   assert.match(relationsSource, /aria-expanded=\{expanded\}/);
   assert.match(relationsSource, /chineseLabel: "阻塞于",\s+englishLabel: "Blocked by"/);
