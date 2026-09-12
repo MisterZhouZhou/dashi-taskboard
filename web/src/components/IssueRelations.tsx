@@ -355,7 +355,7 @@ function IssueTaskTreeNode({
         )}
       </div>
       {expanded && children.length > 0 && (
-        <div className="issue-task-tree-children">
+        <div className={`issue-task-tree-children${depth === 0 ? " issue-task-tree-list" : ""}`}>
           {children.map(({ task: child }) => (
             <IssueTaskTreeNode
               key={child.id}
@@ -440,28 +440,26 @@ export function IssueTaskTree({
           }}
         />
       </header>
-      <div className="issue-task-tree-list">
-        <IssueTaskTreeNode
-          task={task}
-          depth={0}
-          taskById={taskById}
-          expandedIds={expandedIds}
-          onToggle={(taskId) => setExpandedIds((current) => {
-            const next = new Set(current);
-            if (next.has(taskId)) next.delete(taskId); else next.add(taskId);
-            return next;
-          })}
-          onOpenTask={onOpenTask}
-          onRemoveChild={(child, parentId) => {
-            if (!parentId) return;
-            setSavingKey(child.id);
-            void onRemoveRelation(child, "parent", parentId)
-              .catch(() => undefined)
-              .finally(() => setSavingKey(null));
-          }}
-          removingId={savingKey}
-        />
-      </div>
+      <IssueTaskTreeNode
+        task={task}
+        depth={0}
+        taskById={taskById}
+        expandedIds={expandedIds}
+        onToggle={(taskId) => setExpandedIds((current) => {
+          const next = new Set(current);
+          if (next.has(taskId)) next.delete(taskId); else next.add(taskId);
+          return next;
+        })}
+        onOpenTask={onOpenTask}
+        onRemoveChild={(child, parentId) => {
+          if (!parentId) return;
+          setSavingKey(child.id);
+          void onRemoveRelation(child, "parent", parentId)
+            .catch(() => undefined)
+            .finally(() => setSavingKey(null));
+        }}
+        removingId={savingKey}
+      />
     </section>
   );
 }
