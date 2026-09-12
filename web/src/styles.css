@@ -2974,7 +2974,8 @@ kbd {
 
 .issue-description-read {
   border: var(--border-hairline) solid transparent;
-  border-radius: 7px;
+  border-radius: 12px;
+  background: var(--surface-hover);
   cursor: text;
 }
 
