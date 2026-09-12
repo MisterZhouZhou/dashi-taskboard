@@ -337,7 +337,9 @@ function IssueTaskTreeNode({
           <StatusIcon status={task.status} size={14} />
           <span className="issue-relation-id">{task.externalKey ?? task.identifier}</span>
           <span className="issue-relation-title">{task.title}</span>
-          {depth > 0 && <ActorAvatar actor={task.assignee} className="issue-relation-assignee" />}
+          {(depth > 0 || parentId !== undefined) && (
+            <ActorAvatar actor={task.assignee} className="issue-relation-assignee" />
+          )}
         </button>
         {depth > 0 && (
           <button
@@ -421,6 +423,10 @@ export function IssueTaskTree({
     && !ancestors.has(candidate.id)
     && !directIds.has(candidate.id)
   ));
+  const rootChildren = task.relations.subIssues
+    .filter((summary) => summary.id !== task.id)
+    .map((summary) => ({ summary, task: taskById.get(summary.id) }))
+    .filter((item): item is { summary: TaskRelationSummary; task: Task } => Boolean(item.task));
 
   return (
     <section className="issue-task-tree" aria-labelledby="task-tree-heading">
@@ -440,26 +446,34 @@ export function IssueTaskTree({
           }}
         />
       </header>
-      <IssueTaskTreeNode
-        task={task}
-        depth={0}
-        taskById={taskById}
-        expandedIds={expandedIds}
-        onToggle={(taskId) => setExpandedIds((current) => {
-          const next = new Set(current);
-          if (next.has(taskId)) next.delete(taskId); else next.add(taskId);
-          return next;
-        })}
-        onOpenTask={onOpenTask}
-        onRemoveChild={(child, parentId) => {
-          if (!parentId) return;
-          setSavingKey(child.id);
-          void onRemoveRelation(child, "parent", parentId)
-            .catch(() => undefined)
-            .finally(() => setSavingKey(null));
-        }}
-        removingId={savingKey}
-      />
+      {rootChildren.length > 0 && (
+        <div className="issue-task-tree-list">
+          {rootChildren.map(({ task: child }) => (
+            <IssueTaskTreeNode
+              key={child.id}
+              task={child}
+              depth={0}
+              taskById={taskById}
+              expandedIds={expandedIds}
+              onToggle={(taskId) => setExpandedIds((current) => {
+                const next = new Set(current);
+                if (next.has(taskId)) next.delete(taskId); else next.add(taskId);
+                return next;
+              })}
+              onOpenTask={onOpenTask}
+              onRemoveChild={(childTask, parentId) => {
+                if (!parentId) return;
+                setSavingKey(childTask.id);
+                void onRemoveRelation(childTask, "parent", parentId)
+                  .catch(() => undefined)
+                  .finally(() => setSavingKey(null));
+              }}
+              removingId={savingKey}
+              parentId={task.id}
+            />
+          ))}
+        </div>
+      )}
     </section>
   );
 }
