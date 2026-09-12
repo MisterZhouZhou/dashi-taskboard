@@ -878,6 +878,7 @@ function taskFromRow(row) {
       avatarUrl: row.assignee_avatar_url,
     },
     developmentContext: developmentContextFromRow(row),
+    inheritParentContext: row.inherit_parent_context === 1,
     startDate: row.start_date,
     dueDate: row.due_date,
     recurrence: row.recurrence_interval && row.recurrence_unit
@@ -1297,6 +1298,7 @@ function parseTaskCreate(body) {
     "threadBinding",
     "assigneeTarget",
     "developmentContext",
+    "inheritParentContext",
     "startDate",
     "dueDate",
     "recurrence",
@@ -1313,6 +1315,11 @@ function parseTaskCreate(body) {
     threadBinding: parseThreadBinding(body.threadBinding),
     assigneeTarget: parseAssigneeTarget(body.assigneeTarget),
     developmentContext: parseDevelopmentContext(body.developmentContext ?? null),
+    inheritParentContext: body.inheritParentContext === undefined
+      ? false
+      : typeof body.inheritParentContext === "boolean"
+        ? body.inheritParentContext
+        : (() => { throw new ApiError(400, "INVALID_FIELD", "'inheritParentContext' must be boolean"); })(),
     startDate: parseDueDate(body.startDate ?? null, "startDate"),
     dueDate: parseDueDate(body.dueDate ?? null),
     recurrence: parseRecurrence(body.recurrence ?? null),
@@ -1337,6 +1344,7 @@ function parseTaskPatch(body) {
     "threadBinding",
     "assigneeTarget",
     "developmentContext",
+    "inheritParentContext",
     "startDate",
     "dueDate",
     "recurrence",
@@ -1354,6 +1362,10 @@ function parseTaskPatch(body) {
   if (body.labels !== undefined) changes.labels = parseLabels(body.labels);
   if (body.developmentContext !== undefined) {
     changes.developmentContext = parseDevelopmentContext(body.developmentContext);
+  }
+  if (body.inheritParentContext !== undefined) {
+    if (typeof body.inheritParentContext !== "boolean") throw new ApiError(400, "INVALID_FIELD", "'inheritParentContext' must be boolean");
+    changes.inheritParentContext = body.inheritParentContext;
   }
   if (body.startDate !== undefined) changes.startDate = parseDueDate(body.startDate, "startDate");
   if (body.dueDate !== undefined) changes.dueDate = parseDueDate(body.dueDate);
@@ -1740,7 +1752,7 @@ async function createTask(env, input, actor) {
         thread_codex_host_id, thread_workspace_path,
         creator_type, creator_id, creator_name, creator_avatar_url,
         assignee_type, assignee_id, assignee_name, assignee_avatar_url,
-        development_context_type, development_branch,
+        development_context_type, development_branch, inherit_parent_context,
         start_date, due_date, recurrence_interval, recurrence_unit,
         archived_at, version, created_at, updated_at
       )
@@ -1759,7 +1771,7 @@ async function createTask(env, input, actor) {
         ?, ?, ?, ?, ?,
         ?, ?, ?, ?,
         ?, ?, ?, ?,
-        ?, ?,
+        ?, ?, ?,
         ?, ?, ?, ?,
         NULL, 1, ?, ?
       FROM projects
@@ -1786,6 +1798,7 @@ async function createTask(env, input, actor) {
       assignee.avatarUrl,
       input.developmentContext?.type ?? null,
       input.developmentContext?.branch ?? null,
+      input.inheritParentContext ? 1 : 0,
       input.startDate,
       input.dueDate,
       input.recurrence?.interval ?? null,
@@ -1896,6 +1909,7 @@ async function updateTask(env, id, input, actor) {
     labels: "labels",
     startDate: "start_date",
     dueDate: "due_date",
+    inheritParentContext: "inherit_parent_context",
   };
   for (const [key, value] of Object.entries(input.changes)) {
     if (key === "developmentContext") {
@@ -1906,7 +1920,7 @@ async function updateTask(env, id, input, actor) {
       values.push(value?.interval ?? null, value?.unit ?? null);
     } else {
       assignments.push(`${columns[key]} = ?`);
-      values.push(key === "labels" ? JSON.stringify(value) : value);
+      values.push(key === "labels" ? JSON.stringify(value) : key === "inheritParentContext" ? (value ? 1 : 0) : value);
     }
   }
   const statusChanged = Object.hasOwn(input.changes, "status")

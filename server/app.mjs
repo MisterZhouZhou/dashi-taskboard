@@ -633,7 +633,7 @@ function parseTaskCreate(body) {
   assertPlainObject(body);
   assertAllowedKeys(body, new Set([
     "projectId", "title", "description", "status", "priority", "labels", "sortOrder", "threadId", "threadBinding",
-    "assigneeTarget", "developmentContext", "startDate", "dueDate", "recurrence", "executor",
+    "assigneeTarget", "developmentContext", "inheritParentContext", "startDate", "dueDate", "recurrence", "executor",
   ]));
   const projectId = validateProjectId(body.projectId ?? DEFAULT_PROJECT_ID);
   const task = {
@@ -648,6 +648,11 @@ function parseTaskCreate(body) {
     threadBinding: parseThreadBinding(body.threadBinding),
     assigneeTarget: parseAssigneeTarget(body.assigneeTarget),
     developmentContext: parseDevelopmentContext(body.developmentContext ?? null),
+    inheritParentContext: body.inheritParentContext === undefined
+      ? false
+      : typeof body.inheritParentContext === "boolean"
+        ? body.inheritParentContext
+        : (() => { throw new ApiError(400, "INVALID_FIELD", "'inheritParentContext' must be boolean"); })(),
     startDate: parseDueDate(body.startDate ?? null, "startDate"),
     dueDate: parseDueDate(body.dueDate ?? null),
     recurrence: parseRecurrence(body.recurrence ?? null),
@@ -663,7 +668,7 @@ function parseTaskPatch(body) {
   assertPlainObject(body);
   assertAllowedKeys(body, new Set([
     "version", "projectId", "title", "description", "status", "priority", "labels", "threadId", "threadBinding",
-    "assigneeTarget", "developmentContext", "startDate", "dueDate", "recurrence", "executor",
+    "assigneeTarget", "developmentContext", "inheritParentContext", "startDate", "dueDate", "recurrence", "executor",
   ]));
   const version = parseVersion(body.version);
   const threadId = parseThreadId(body.threadId);
@@ -677,6 +682,10 @@ function parseTaskPatch(body) {
   if (body.priority !== undefined) changes.priority = parsePriority(body.priority);
   if (body.labels !== undefined) changes.labels = parseLabels(body.labels);
   if (body.developmentContext !== undefined) changes.developmentContext = parseDevelopmentContext(body.developmentContext);
+  if (body.inheritParentContext !== undefined) {
+    if (typeof body.inheritParentContext !== "boolean") throw new ApiError(400, "INVALID_FIELD", "'inheritParentContext' must be boolean");
+    changes.inheritParentContext = body.inheritParentContext;
+  }
   if (body.startDate !== undefined) changes.startDate = parseDueDate(body.startDate, "startDate");
   if (body.dueDate !== undefined) changes.dueDate = parseDueDate(body.dueDate);
   if (body.recurrence !== undefined) changes.recurrence = parseRecurrence(body.recurrence);

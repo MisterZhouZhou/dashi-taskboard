@@ -515,6 +515,7 @@ export interface Task {
   creatorAvatarUrl: string | null;
   assignee: ActorIdentity;
   developmentContext: DevelopmentContext | null;
+  inheritParentContext: boolean;
   startDate: string | null;
   dueDate: string | null;
   recurrence: Recurrence | null;
@@ -618,6 +619,7 @@ export interface TaskDraft {
   labels: string[];
   assigneeTarget?: AssigneeTarget;
   developmentContext: DevelopmentContext | null;
+  inheritParentContext: boolean;
   startDate: string | null;
   dueDate: string | null;
   recurrence: Recurrence | null;

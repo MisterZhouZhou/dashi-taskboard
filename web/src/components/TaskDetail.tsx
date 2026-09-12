@@ -1860,6 +1860,30 @@ export function TaskDetail({
                 onDeleteLabel={currentTask.source === "jira" ? undefined : onDeleteLabel}
               />
             </div>
+            {currentTask.relations.parent && (
+              <div className="detail-property-row context-inheritance-property">
+                <span className="detail-property-label">{text("执行上下文", "Execution context")}</span>
+                <label className="detail-context-toggle">
+                  <input
+                    type="checkbox"
+                    checked={currentTask.inheritParentContext}
+                    disabled={savingProperty === "inheritParentContext"}
+                    onChange={(event) => void saveTask({
+                      inheritParentContext: event.target.checked,
+                    }, "inheritParentContext")}
+                  />
+                  <span>{text("继承父任务执行上下文", "Inherit parent execution context")}</span>
+                </label>
+                <span className="detail-context-source">
+                  {currentTask.inheritParentContext
+                    ? text(
+                      `父任务：${currentTask.relations.parent.externalKey ?? currentTask.relations.parent.identifier}`,
+                      `Parent: ${currentTask.relations.parent.externalKey ?? currentTask.relations.parent.identifier}`,
+                    )
+                    : text("当前任务独立执行", "Run independently")}
+                </span>
+              </div>
+            )}
             <div className="detail-property-row development-property">
               <span className="detail-property-label">{text("开发上下文", "Development context")}</span>
               <TaskPropertyPicker

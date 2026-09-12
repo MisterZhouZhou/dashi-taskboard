@@ -93,6 +93,7 @@ export interface NewTaskEditorDraft {
   assignee: ActorIdentity;
   selectedLabels: string[];
   developmentContext: DevelopmentContext | null;
+  inheritParentContext: boolean;
   startDate: string;
   dueDate: string;
   recurrence: Recurrence | null;
@@ -194,10 +195,11 @@ export function TaskEditor({
   const [assignee, setAssignee] = useState<ActorIdentity>(task?.assignee ?? initialDraft?.assignee ?? currentUser);
   const [selectedLabels, setSelectedLabels] = useState<string[]>(task?.labels ?? initialDraft?.selectedLabels ?? []);
   const [developmentContext, setDevelopmentContext] = useState<DevelopmentContext | null>(task?.developmentContext ?? initialDraft?.developmentContext ?? null);
+  const [inheritParentContext, setInheritParentContext] = useState(task?.inheritParentContext ?? initialDraft?.inheritParentContext ?? false);
   const [startDate] = useState(task?.startDate ?? initialDraft?.startDate ?? "");
   const [dueDate, setDueDate] = useState(task?.dueDate ?? initialDraft?.dueDate ?? "");
   const [recurrence, setRecurrence] = useState<Recurrence | null>(task?.recurrence ?? initialDraft?.recurrence ?? null);
-  const [parentId, setParentId] = useState<string | null>(initialDraft?.relations.parentId ?? null);
+  const [parentId, setParentId] = useState<string | null>(task?.relations.parent?.id ?? initialDraft?.relations.parentId ?? null);
   const [relatedIds, setRelatedIds] = useState<string[]>(initialDraft?.relations.relatedIds ?? []);
   const [subIssueIds, setSubIssueIds] = useState<string[]>(initialDraft?.relations.subIssueIds ?? []);
   const [createMore, setCreateMore] = useState(false);
@@ -304,7 +306,11 @@ export function TaskEditor({
 
   function toggleDraftRelation(candidate: Task) {
     if (relationMenu === "parent") {
-      setParentId((current) => current === candidate.id ? null : candidate.id);
+      setParentId((current) => {
+        const next = current === candidate.id ? null : candidate.id;
+        if (!task && next) setInheritParentContext(true);
+        return next;
+      });
     } else if (relationMenu === "related") {
       setRelatedIds((current) => current.includes(candidate.id)
         ? current.filter((id) => id !== candidate.id)
@@ -399,6 +405,7 @@ export function TaskEditor({
         labels: selectedLabels,
         ...(assigneeTarget ? { assigneeTarget } : {}),
         developmentContext,
+        inheritParentContext,
         startDate: startDate || null,
         dueDate: dueDate || null,
         recurrence,
@@ -479,6 +486,7 @@ export function TaskEditor({
       assignee,
       selectedLabels,
       developmentContext,
+      inheritParentContext,
       startDate,
       dueDate,
       recurrence,
@@ -693,6 +701,17 @@ export function TaskEditor({
               onOpenChange={(open) => setMenu(open ? "development" : null)}
               onChange={(value) => setDevelopmentContext(value ? JSON.parse(value) as DevelopmentContext : null)}
             />
+
+            {(task?.relations.parent || selectedParent) && (
+              <label className="task-context-inheritance-toggle">
+                <input
+                  type="checkbox"
+                  checked={inheritParentContext}
+                  onChange={(event) => setInheritParentContext(event.target.checked)}
+                />
+                <span>{text("继承父任务执行上下文", "Inherit parent execution context")}</span>
+              </label>
+            )}
 
             {dueDate && (
               <button className="property-control" type="button" onClick={() => setMenu("due")}>

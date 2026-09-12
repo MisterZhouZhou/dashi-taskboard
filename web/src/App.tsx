@@ -97,6 +97,7 @@ import {
   setEmbeddedFrameChallenge,
 } from "./embeddedHost.mjs";
 import { buildIssueUrl, readIssueIdentifier } from "./issueRoute";
+import { buildParentContextSummary, resolveEffectiveDevelopmentContext } from "./taskExecutionContext";
 import {
   getTaskboardI18n,
   resolveTaskboardLanguage,
@@ -598,6 +599,7 @@ function taskToDraft(task: Task): TaskDraft {
     priority: task.priority,
     labels: task.labels,
     developmentContext: task.developmentContext,
+    inheritParentContext: task.inheritParentContext,
     startDate: task.startDate,
     dueDate: task.dueDate,
     recurrence: task.recurrence,
@@ -3079,9 +3081,10 @@ export function App() {
   function remoteIdentityForTask(
     task: Task,
     baseIdentity: CodexProjectIdentity,
+    developmentContext = task.developmentContext,
   ): CodexProjectIdentity | null {
-    if (task.developmentContext?.type === "worktree") {
-      const worktreePath = task.developmentContext.path;
+    if (developmentContext?.type === "worktree") {
+      const worktreePath = developmentContext.path;
       const matches = (hostContext?.projects ?? []).filter((project) => (
         project.projectKind === "remote"
         && project.hostId === baseIdentity.codexHostId
@@ -3105,6 +3108,8 @@ export function App() {
   }
 
   async function openTaskInThread(task: Task) {
+    const effectiveDevelopmentContext = resolveEffectiveDevelopmentContext(task, tasksRef.current).context;
+    const inheritedParentSummary = buildParentContextSummary(task, tasksRef.current);
     const standalone = !embedded || window.parent === window;
     const projectless = task.projectId === GLOBAL_PROJECT_ID;
     const taskboardProject = projects.find((project) => project.id === task.projectId);
@@ -3124,9 +3129,9 @@ export function App() {
       return;
     }
     if (!standalone && codexProjectContext?.codexProjectKind === "remote") {
-      const identity = remoteIdentityForTask(task, codexProjectContext);
+      const identity = remoteIdentityForTask(task, codexProjectContext, effectiveDevelopmentContext);
       if (!identity) {
-        setActionError(task.developmentContext?.type === "worktree"
+        setActionError(effectiveDevelopmentContext?.type === "worktree"
           ? text(
             "目标 SSH worktree 未在保存的主机中添加或映射。",
             "The target SSH worktree is not added or mapped on the saved host.",
@@ -3141,22 +3146,22 @@ export function App() {
     }
     let workspacePath = projectless
       ? undefined
-      : task.developmentContext?.type === "worktree"
-        ? task.developmentContext.path
+      : effectiveDevelopmentContext?.type === "worktree"
+        ? effectiveDevelopmentContext.path
         : codexProjectContext?.workspacePath
           ?? deviceWorkspacePaths[task.projectId]
           ?? taskboardProject?.workspacePath;
     const embeddedInstruction = text(
-      `[$manage-taskboard](${manageTaskboardSkillPath}) 议题 ID：${task.identifier}`,
-      `[$manage-taskboard](${manageTaskboardSkillPath}) Issue ID: ${task.identifier}`,
+      `[$manage-taskboard](${manageTaskboardSkillPath}) 议题 ID：${task.identifier}${inheritedParentSummary ? `\n${inheritedParentSummary}` : ""}`,
+      `[$manage-taskboard](${manageTaskboardSkillPath}) Issue ID: ${task.identifier}${inheritedParentSummary ? `\n${inheritedParentSummary}` : ""}`,
     );
 
     if (
       !projectless
-      && task.developmentContext?.type === "worktree"
+      && effectiveDevelopmentContext?.type === "worktree"
       && codexProjectContext?.codexProjectKind !== "remote"
     ) {
-      const expectedWorktreePath = task.developmentContext.path;
+      const expectedWorktreePath = effectiveDevelopmentContext.path;
       const baseWorkspacePath = codexProjectContext?.workspacePath
         ?? deviceWorkspacePaths[task.projectId]
         ?? taskboardProject?.workspacePath;

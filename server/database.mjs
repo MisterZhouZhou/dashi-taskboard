@@ -261,6 +261,7 @@ function taskFromRow(row) {
       avatarUrl: row.assignee_avatar_url,
     },
     developmentContext,
+    inheritParentContext: row.inherit_parent_context === 1,
     startDate: row.start_date,
     dueDate: row.due_date,
     executor: row.executor ?? null,
@@ -556,6 +557,7 @@ export class TaskboardDatabase {
         git_branch TEXT,
         worktree_path TEXT,
         worktree_branch TEXT,
+        inherit_parent_context INTEGER NOT NULL DEFAULT 0,
         start_date TEXT,
         due_date TEXT,
         executor TEXT,
@@ -899,6 +901,10 @@ export class TaskboardDatabase {
         this.database.exec("ROLLBACK");
         throw error;
       }
+    }
+    const refreshedTaskColumns = this.database.prepare("PRAGMA table_info(tasks)").all();
+    if (!refreshedTaskColumns.some((column) => column.name === "inherit_parent_context")) {
+      this.database.exec("ALTER TABLE tasks ADD COLUMN inherit_parent_context INTEGER NOT NULL DEFAULT 0");
     }
     if (!projectColumns.some((column) => column.name === "labels")) {
       this.database.exec("BEGIN IMMEDIATE");
@@ -2430,10 +2436,10 @@ export class TaskboardDatabase {
           thread_codex_host_id, thread_workspace_path,
           creator_type, creator_id, creator_name, creator_avatar_url,
           assignee_type, assignee_id, assignee_name, assignee_avatar_url,
-          git_branch, worktree_path, worktree_branch,
+          git_branch, worktree_path, worktree_branch, inherit_parent_context,
           start_date, due_date, recurrence_interval, recurrence_unit, executor,
           archived_at, version, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 1, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 1, ?, ?)
       `).run(
         id,
         identifier,
@@ -2456,6 +2462,7 @@ export class TaskboardDatabase {
         input.developmentContext?.type === "branch" ? input.developmentContext.branch : null,
         input.developmentContext?.type === "worktree" ? input.developmentContext.path : null,
         input.developmentContext?.type === "worktree" ? input.developmentContext.branch : null,
+        input.inheritParentContext ? 1 : 0,
         input.startDate,
         input.dueDate,
         input.recurrence?.interval ?? null,
@@ -2521,6 +2528,7 @@ export class TaskboardDatabase {
       startDate: "start_date",
       dueDate: "due_date",
       executor: "executor",
+      inheritParentContext: "inherit_parent_context",
     };
     const assignments = [];
     const values = [];
@@ -2550,7 +2558,7 @@ export class TaskboardDatabase {
         continue;
       }
       assignments.push(`${columns[key]} = ?`);
-      values.push(key === "labels" ? JSON.stringify(value) : value);
+      values.push(key === "labels" ? JSON.stringify(value) : key === "inheritParentContext" ? (value ? 1 : 0) : value);
     }
     if (Object.hasOwn(changes, "status") && changes.status !== current.status) {
       const placementProjectId = projectChanged ? targetProject.id : current.projectId;

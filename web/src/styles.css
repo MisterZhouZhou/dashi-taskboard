@@ -4703,6 +4703,42 @@ kbd {
   color: var(--text-secondary);
 }
 
+.context-inheritance-property {
+  display: grid;
+  grid-template-columns: 80px minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+}
+
+.detail-context-toggle {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  gap: 7px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.detail-context-toggle input,
+.task-context-inheritance-toggle input {
+  accent-color: var(--accent);
+}
+
+.detail-context-source {
+  grid-column: 2;
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+
+.task-context-inheritance-toggle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 7px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
 .detail-property-row {
   display: grid;
   grid-template-columns: 80px minmax(0, 1fr);
