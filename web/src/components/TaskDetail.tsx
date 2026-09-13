@@ -1880,7 +1880,7 @@ export function TaskDetail({
             </div>
             {currentTask.relations.parent && (
               <div className="detail-property-row context-inheritance-property">
-                <span className="detail-property-label">{text("执行上下文", "Execution context")}</span>
+                <span className="detail-property-label">{text("继承父上下文", "Inherit parent context")}</span>
                 <button
                   type="button"
                   className={`board-setting-switch detail-context-switch${currentTask.inheritParentContext ? " is-on" : ""}`}
