@@ -349,7 +349,13 @@ function IssueTaskTreeNode({
               `Remove ${task.externalKey ?? task.identifier}`,
             )}
             disabled={removingId === task.id}
-            onClick={() => onRemoveChild(task, parentId ?? "")}
+            onClick={() => {
+              const confirmed = window.confirm(text(
+                `确定要从当前任务中移除“${task.title}”吗？这只会解除父子关系，不会删除任务。`,
+                `Remove “${task.title}” from this task? This only removes the parent relationship; the task will not be deleted.`,
+              ));
+              if (confirmed) onRemoveChild(task, parentId ?? "");
+            }}
           >
             <LinearIcon name="close" />
           </button>
