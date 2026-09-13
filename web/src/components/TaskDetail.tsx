@@ -91,6 +91,7 @@ import {
 } from "./InlineMediaComposer";
 import {
   IssueRelationSidebar,
+  IssueTaskTree,
   type RelationMutationResult,
 } from "./IssueRelations";
 import { TaskPropertyPicker } from "./TaskPropertyPicker";
@@ -242,7 +243,7 @@ const ACTIVITY_FIELD_LABELS: Record<string, readonly [string, string]> = {
   recurrence: ["重复", "recurrence"],
   archivedAt: ["归档状态", "archive status"],
   relation: ["关系", "relation"],
-  inheritParentContext: ["执行上下文", "execution context"],
+  inheritParentContext: ["继承父上下文", "Inherit parent context"],
 };
 
 const RELATION_LABELS: Record<IssueRelationType, readonly [string, string]> = {
@@ -265,6 +266,9 @@ function activityValue(
       : text("未归档", "Not archived");
   }
   if (value === null || value === "") return text("未设置", "Not set");
+  if (field === "inheritParentContext" && typeof value === "boolean") {
+    return value ? text("开启了继承父上下文", "Enabled parent context inheritance") : text("关闭了继承父上下文", "Disabled parent context inheritance");
+  }
   if (field === "status" && typeof value === "string" && value in STATUS_DETAILS) {
     return taskStatusLabel(language, value as TaskStatus);
   }
@@ -1258,6 +1262,18 @@ export function TaskDetail({
                 </div>
               )}
             </article>
+
+            <IssueTaskTree
+              task={currentTask}
+              tasks={tasks}
+              onOpenTask={onOpenTask}
+              onAddRelation={(anchor, type, relatedTaskId) => applyRelationMutation(
+                () => onAddRelation(anchor, type, relatedTaskId),
+              )}
+              onRemoveRelation={(anchor, type, relatedTaskId) => applyRelationMutation(
+                () => onRemoveRelation(anchor, type, relatedTaskId),
+              )}
+            />
 
             <section className="activity-section" aria-labelledby="activity-heading">
               <header className="activity-heading">
