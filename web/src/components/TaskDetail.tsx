@@ -1881,27 +1881,29 @@ export function TaskDetail({
             {currentTask.relations.parent && (
               <div className="detail-property-row context-inheritance-property">
                 <span className="detail-property-label">{text("继承父上下文", "Inherit parent context")}</span>
-                <button
-                  type="button"
-                  className={`board-setting-switch detail-context-switch${currentTask.inheritParentContext ? " is-on" : ""}`}
-                  role="switch"
-                  aria-checked={currentTask.inheritParentContext}
-                  aria-label={text("继承父任务执行上下文", "Inherit parent execution context")}
-                  disabled={savingProperty === "inheritParentContext"}
-                  onClick={() => void saveTask({
-                    inheritParentContext: !currentTask.inheritParentContext,
-                  }, "inheritParentContext")}
-                >
-                  <span aria-hidden="true" />
-                </button>
-                <span className="detail-context-source">
-                  {currentTask.inheritParentContext
-                    ? text(
-                      `继承自：${currentTask.relations.parent.title}`,
-                      `Inherited from: ${currentTask.relations.parent.title}`,
-                    )
-                    : text("当前任务独立执行", "Run independently")}
-                </span>
+                <div className="detail-context-control">
+                  <button
+                    type="button"
+                    className={`board-setting-switch detail-context-switch${currentTask.inheritParentContext ? " is-on" : ""}`}
+                    role="switch"
+                    aria-checked={currentTask.inheritParentContext}
+                    aria-label={text("继承父任务执行上下文", "Inherit parent execution context")}
+                    disabled={savingProperty === "inheritParentContext"}
+                    onClick={() => void saveTask({
+                      inheritParentContext: !currentTask.inheritParentContext,
+                    }, "inheritParentContext")}
+                  >
+                    <span aria-hidden="true" />
+                  </button>
+                  <span className="detail-context-source">
+                    {currentTask.inheritParentContext
+                      ? text(
+                        `继承自：${currentTask.relations.parent.title}`,
+                        `Inherited from: ${currentTask.relations.parent.title}`,
+                      )
+                      : text("当前任务独立执行", "Run independently")}
+                  </span>
+                </div>
               </div>
             )}
             <div className="detail-property-row development-property">

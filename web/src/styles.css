@@ -4705,14 +4705,21 @@ kbd {
 
 .context-inheritance-property {
   display: grid;
-  grid-template-columns: 80px auto minmax(0, 1fr);
+  grid-template-columns: 80px minmax(0, 1fr);
   align-items: center;
   gap: 7px;
 }
 
-.detail-context-switch {
+.detail-context-control {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  gap: 6px;
   grid-column: 2;
   grid-row: 1;
+}
+
+.detail-context-switch {
   width: 28px;
   height: 17px;
   flex: 0 0 auto;
@@ -4730,11 +4737,12 @@ kbd {
 }
 
 .detail-context-source {
-  grid-column: 3;
-  grid-row: 1;
   min-width: 0;
+  overflow: hidden;
   color: var(--text-tertiary);
   font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .task-context-inheritance-toggle {
