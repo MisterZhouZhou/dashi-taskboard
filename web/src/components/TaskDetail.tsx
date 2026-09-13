@@ -1883,8 +1883,8 @@ export function TaskDetail({
                 <span className="detail-context-source">
                   {currentTask.inheritParentContext
                     ? text(
-                      `父任务：${currentTask.relations.parent.externalKey ?? currentTask.relations.parent.identifier}`,
-                      `Parent: ${currentTask.relations.parent.externalKey ?? currentTask.relations.parent.identifier}`,
+                      `继承自：${currentTask.relations.parent.title}`,
+                      `Inherited from: ${currentTask.relations.parent.title}`,
                     )
                     : text("当前任务独立执行", "Run independently")}
                 </span>

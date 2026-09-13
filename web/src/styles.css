@@ -4711,11 +4711,26 @@ kbd {
 }
 
 .detail-context-switch {
+  width: 28px;
+  height: 17px;
   flex: 0 0 auto;
 }
 
+.detail-context-switch > span:first-child {
+  top: 2px;
+  left: 2px;
+  width: 13px;
+  height: 13px;
+}
+
+.detail-context-switch.is-on > span:first-child {
+  transform: translateX(11px);
+}
+
 .detail-context-source {
-  grid-column: 2 / 4;
+  grid-column: 2;
+  grid-row: 1;
+  min-width: 0;
   color: var(--text-tertiary);
   font-size: 11px;
 }

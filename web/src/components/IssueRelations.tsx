@@ -335,7 +335,6 @@ function IssueTaskTreeNode({
           })}
         >
           <StatusIcon status={task.status} size={14} />
-          <span className="issue-relation-id">{task.externalKey ?? task.identifier}</span>
           <span className="issue-relation-title">{task.title}</span>
           {(depth > 0 || parentId !== undefined) && (
             <ActorAvatar actor={task.assignee} className="issue-relation-assignee" />
