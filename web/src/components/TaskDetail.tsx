@@ -91,7 +91,6 @@ import {
 } from "./InlineMediaComposer";
 import {
   IssueRelationSidebar,
-  IssueTaskTree,
   type RelationMutationResult,
 } from "./IssueRelations";
 import { TaskPropertyPicker } from "./TaskPropertyPicker";
@@ -243,6 +242,7 @@ const ACTIVITY_FIELD_LABELS: Record<string, readonly [string, string]> = {
   recurrence: ["重复", "recurrence"],
   archivedAt: ["归档状态", "archive status"],
   relation: ["关系", "relation"],
+  inheritParentContext: ["执行上下文", "execution context"],
 };
 
 const RELATION_LABELS: Record<IssueRelationType, readonly [string, string]> = {
@@ -1259,18 +1259,6 @@ export function TaskDetail({
               )}
             </article>
 
-            <IssueTaskTree
-              task={currentTask}
-              tasks={tasks}
-              onOpenTask={onOpenTask}
-              onAddRelation={(anchor, type, relatedTaskId) => applyRelationMutation(
-                () => onAddRelation(anchor, type, relatedTaskId),
-              )}
-              onRemoveRelation={(anchor, type, relatedTaskId) => applyRelationMutation(
-                () => onRemoveRelation(anchor, type, relatedTaskId),
-              )}
-            />
-
             <section className="activity-section" aria-labelledby="activity-heading">
               <header className="activity-heading">
                 <h2 id="activity-heading">{text("活动", "Activity")}</h2>
@@ -1863,17 +1851,19 @@ export function TaskDetail({
             {currentTask.relations.parent && (
               <div className="detail-property-row context-inheritance-property">
                 <span className="detail-property-label">{text("执行上下文", "Execution context")}</span>
-                <label className="detail-context-toggle">
-                  <input
-                    type="checkbox"
-                    checked={currentTask.inheritParentContext}
-                    disabled={savingProperty === "inheritParentContext"}
-                    onChange={(event) => void saveTask({
-                      inheritParentContext: event.target.checked,
-                    }, "inheritParentContext")}
-                  />
-                  <span>{text("继承父任务执行上下文", "Inherit parent execution context")}</span>
-                </label>
+                <button
+                  type="button"
+                  className={`board-setting-switch detail-context-switch${currentTask.inheritParentContext ? " is-on" : ""}`}
+                  role="switch"
+                  aria-checked={currentTask.inheritParentContext}
+                  aria-label={text("继承父任务执行上下文", "Inherit parent execution context")}
+                  disabled={savingProperty === "inheritParentContext"}
+                  onClick={() => void saveTask({
+                    inheritParentContext: !currentTask.inheritParentContext,
+                  }, "inheritParentContext")}
+                >
+                  <span aria-hidden="true" />
+                </button>
                 <span className="detail-context-source">
                   {currentTask.inheritParentContext
                     ? text(
