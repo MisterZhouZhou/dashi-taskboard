@@ -4711,6 +4711,8 @@ kbd {
 }
 
 .detail-context-switch {
+  grid-column: 3;
+  grid-row: 1;
   width: 28px;
   height: 17px;
   flex: 0 0 auto;

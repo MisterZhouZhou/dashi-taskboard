@@ -1345,6 +1345,20 @@ export function TaskDetail({
                             <>{text("添加了 ", "added ")}<span className="activity-change-value">{afterValue}</span></>
                           ) : change.field === "relation" && change.after === null ? (
                             <>{text("移除了 ", "removed ")}<span className="activity-change-value">{beforeValue}</span></>
+                          ) : change.field === "inheritParentContext" && language === "zh" ? (
+                            <>
+                              将{fieldLabel}从
+                              <span className="activity-change-value">{beforeValue === "开启了继承父上下文" ? "开启" : "关闭"}</span>
+                              改为
+                              <span className="activity-change-value">{afterValue === "开启了继承父上下文" ? "开启" : "关闭"}</span>
+                            </>
+                          ) : change.field === "inheritParentContext" ? (
+                            <>
+                              changed {fieldLabel} from
+                              <span className="activity-change-value">{beforeValue.includes("Enabled") ? "enabled" : "disabled"}</span>
+                              to
+                              <span className="activity-change-value">{afterValue.includes("Enabled") ? "enabled" : "disabled"}</span>
+                            </>
                           ) : language === "zh" ? (
                             <>
                               将{fieldLabel}从
