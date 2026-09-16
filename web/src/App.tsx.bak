@@ -3367,7 +3367,7 @@ export function App() {
       const project = await createProjectRequest({
         id: projectId,
         name,
-        workspacePath: hostContext?.workspacePath ?? null,
+        workspacePath: null,
       });
       setProjects((current) => [...current, project]);
       setProjectCreateOpen(false);
