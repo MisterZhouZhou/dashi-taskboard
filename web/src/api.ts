@@ -196,6 +196,10 @@ export async function syncJiraConnection(): Promise<JiraConnection> {
   return data.connection;
 }
 
+export async function disconnectJiraConnection(): Promise<void> {
+  await request<void>("/api/local/jira-connection", { method: "DELETE" });
+}
+
 export async function getProjectSummary(
   projectId: string,
   signal?: AbortSignal,

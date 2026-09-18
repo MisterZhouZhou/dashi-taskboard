@@ -1,6 +1,6 @@
 import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { readFile, readdir, realpath, stat } from "node:fs/promises";
+import { mkdir, readFile, readdir, realpath, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -223,6 +223,18 @@ async function existingDirectory(value) {
   }
 }
 
+async function ensureDirectory(value) {
+  if (typeof value !== "string" || !path.isAbsolute(value.trim())) return null;
+  try {
+    const trimmed = value.trim();
+    await mkdir(trimmed, { recursive: true });
+    const resolved = await realpath(trimmed);
+    return (await stat(resolved)).isDirectory() ? resolved : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function loadDeviceWorkspaces(codexStatePath, database) {
   const workspaces = new Map();
   let localProjects = {};
@@ -249,7 +261,10 @@ export async function loadDeviceWorkspaces(codexStatePath, database) {
 
   for (const project of await database.listProjects()) {
     if (workspaces.has(project.id)) continue;
-    const workspacePath = await existingDirectory(project.workspacePath);
+    let workspacePath = await existingDirectory(project.workspacePath);
+    if (!workspacePath && project.workspacePath) {
+      workspacePath = await ensureDirectory(project.workspacePath);
+    }
     if (workspacePath) workspaces.set(project.id, workspacePath);
   }
   return workspaces;

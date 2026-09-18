@@ -2332,7 +2332,19 @@ export function createTaskboardServer(options = {}) {
             throw new ApiError(400, error.code ?? "INVALID_JIRA_CONFIG", error.message);
           }
         }
-        return methodNotAllowed(response, ["GET", "PUT"]);
+        if (request.method === "DELETE") {
+          const activeCloudConfig = await cloudConfig.read();
+          if (activeCloudConfig.remoteUrl) {
+            throw new ApiError(
+              409,
+              "JIRA_LOCAL_MODE_REQUIRED",
+              "Jira 连接当前仅支持本地数据模式，请先退出云端协作模式",
+            );
+          }
+          await jira.disconnect();
+          return sendEmpty(response, 204);
+        }
+        return methodNotAllowed(response, ["GET", "PUT", "DELETE"]);
       }
 
       if (pathname === "/api/local/jira-connection/sync") {
@@ -2633,6 +2645,27 @@ export function createTaskboardServer(options = {}) {
         return sendJson(response, 200, {
           workspaces: await readCodexProjectWorkspaces(resolved.codexStatePath),
         });
+      }
+
+      if (pathname === "/api/select-directory") {
+        if (request.method !== "POST") return methodNotAllowed(response, ["POST"]);
+        assertLoopbackRequest(request);
+        const body = await readJson(request);
+        const { initialPath } = body;
+
+        try {
+          const { stdout } = await execFileAsync("osascript", [
+            "-e",
+            initialPath
+              ? `POSIX path of (choose folder with prompt "选择项目目录" default location POSIX file "${initialPath}")`
+              : 'POSIX path of (choose folder with prompt "选择项目目录")',
+          ]);
+          const selectedPath = stdout.trim();
+          return sendJson(response, 200, { path: selectedPath });
+        } catch (error) {
+          // 用户取消选择或出错
+          return sendJson(response, 200, { path: null });
+        }
       }
 
 

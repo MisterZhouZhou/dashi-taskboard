@@ -388,6 +388,11 @@ export function createJiraIntegration({ configStore, database, fetch: fetchImple
       return safeConfig(savedConfig, lastSyncedAt);
     },
     sync,
+    async disconnect() {
+      await configStore.clear();
+      lastSyncedAt = null;
+      database.deleteJiraProject();
+    },
     async reconcile() {
       const config = await configStore.read();
       if (!config || config.version !== 2) {

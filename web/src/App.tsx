@@ -46,6 +46,7 @@ import {
   saveProjectAutoClaim,
   setApiText,
   setCurrentUserActor,
+  disconnectJiraConnection,
   syncJiraConnection,
   uploadAttachment,
   updateTask as updateTaskRequest,
@@ -836,6 +837,9 @@ export function App() {
   const [projectContextMenu, setProjectContextMenu] = useState<ProjectContextMenuState | null>(null);
   const [projectCreateOpen, setProjectCreateOpen] = useState(false);
   const [projectName, setProjectName] = useState("");
+  const [projectWorkspacePath, setProjectWorkspacePath] = useState("");
+  const [workspaceAddOpen, setWorkspaceAddOpen] = useState(false);
+  const [workspaceAddPath, setWorkspaceAddPath] = useState("");
   const [jiraDialogOpen, setJiraDialogOpen] = useState(false);
   const [jiraConnection, setJiraConnection] = useState<JiraConnection | null>(null);
   const [jiraSaving, setJiraSaving] = useState(false);
@@ -944,10 +948,15 @@ export function App() {
   const automationModels = automationCatalog && automationCatalog.projectId === selectedProject?.id
     ? automationCatalog.models
     : [];
+  // 没有工作区的项目（例如“创建项目”建出的纯名称项目）无法解析 AI 工作区，
+  // 服务端会拒绝相关请求，因此不发请求也不显示依赖它的入口。
+  const selectedProjectHasWorkspace = Boolean(
+    selectedProject && (selectedProject.workspacePath || deviceWorkspacePaths[selectedProject.id]),
+  );
   useEffect(() => {
     setAutomationCatalog(null);
     setAutomationCatalogError(null);
-    if (!selectedProject || !localAiChatAvailable) {
+    if (!selectedProject || !localAiChatAvailable || !selectedProjectHasWorkspace) {
       setAutomationCatalogLoading(false);
       return;
     }
@@ -968,13 +977,14 @@ export function App() {
       },
     );
     return () => controller.abort();
-  }, [localAiChatAvailable, selectedProject?.id, text]);
+  }, [localAiChatAvailable, selectedProject?.id, selectedProjectHasWorkspace, text]);
   const aiImportProjectId = hasLoadedTasks
     && tasks.length === 0
     && selectedProject
     && selectedProject.id !== GLOBAL_PROJECT_ID
     && !isJiraProject
     && localAiChatAvailable
+    && selectedProjectHasWorkspace
       ? selectedProject.id
       : null;
   useEffect(() => {
@@ -1028,14 +1038,24 @@ export function App() {
   const automationProjectContext = useMemo<Partial<CodexProjectIdentity> & {
     unavailableReason: string | null;
   }>(() => {
-    if (!embedded || window.parent === window) {
-      return { unavailableReason: text("仅可在 Codex App 中使用", "Available only in the Codex app") };
-    }
-    if (!isLocalTaskboardOrigin(new URL(document.baseURI).origin)) {
-      return { unavailableReason: text("仅本地任务面板可用", "Available only on the local taskboard") };
-    }
     if (!selectedProject) {
       return { unavailableReason: text("请先选择项目", "Select a project first") };
+    }
+    // CLI 执行器（codex / claude-code）只需要工作区路径，由 server 端解析；
+    // codex-native 才需要 Codex App 内嵌环境和身份映射。
+    const cliWorkspacePath = deviceWorkspacePaths[selectedProject.id]
+      ?? selectedProject.workspacePath;
+    if (!embedded || window.parent === window) {
+      return {
+        workspacePath: cliWorkspacePath,
+        unavailableReason: text("仅可在 Codex App 中使用", "Available only in the Codex app"),
+      };
+    }
+    if (!isLocalTaskboardOrigin(new URL(document.baseURI).origin)) {
+      return {
+        workspacePath: cliWorkspacePath,
+        unavailableReason: text("仅本地任务面板可用", "Available only on the local taskboard"),
+      };
     }
 
     const savedIdentity = projectCodexIdentities[selectedProject.id];
@@ -3353,6 +3373,8 @@ export function App() {
   function closeCreateProjectDialog() {
     if (openingProjectId) return;
     setProjectCreateOpen(false);
+    setProjectName("");
+    setProjectWorkspacePath("");
     setActionError(null);
   }
 
@@ -3367,10 +3389,98 @@ export function App() {
       const project = await createProjectRequest({
         id: projectId,
         name,
-        workspacePath: hostContext?.workspacePath ?? null,
+        workspacePath: projectWorkspacePath.trim() || null,
       });
       setProjects((current) => [...current, project]);
       setProjectCreateOpen(false);
+      setProjectName("");
+      setProjectWorkspacePath("");
+      changeProject(project.id);
+    } catch (error) {
+      setActionError(errorMessage(error));
+    } finally {
+      setOpeningProjectId(null);
+    }
+  }
+
+  function openAddWorkspaceDialog() {
+    setProjectMenuOpen(false);
+    setProjectContextMenu(null);
+    setWorkspaceAddPath("");
+    setActionError(null);
+    setWorkspaceAddOpen(true);
+  }
+
+  function closeAddWorkspaceDialog() {
+    if (openingProjectId) return;
+    setWorkspaceAddOpen(false);
+    setWorkspaceAddPath("");
+    setActionError(null);
+  }
+
+  async function chooseWorkspaceDirectory() {
+    const initialPath = workspaceAddPath.trim();
+
+    try {
+      // 调用后端 API 选择目录
+      const response = await fetch("/api/select-directory", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(initialPath ? { initialPath } : {}),
+      });
+
+      if (!response.ok) {
+        throw new Error("Failed to select directory");
+      }
+
+      const data = await response.json();
+      if (!data.path) {
+        // 用户取消选择
+        return;
+      }
+
+      setWorkspaceAddPath(data.path);
+    } catch (error) {
+      setActionError(errorMessage(error));
+    }
+  }
+
+  async function createWorkspaceProject() {
+    if (openingProjectId) return;
+    const workspacePath = workspaceAddPath.trim();
+    if (!workspacePath) return;
+    const name = workspacePath.replace(/\/+$/, "").split("/").pop() || workspacePath;
+    const projectId = `temp-${window.crypto.randomUUID()}`;
+    setOpeningProjectId(projectId);
+    setActionError(null);
+    try {
+      const project = await createProjectRequest({
+        id: projectId,
+        name,
+        workspacePath,
+      });
+      setProjects((current) => [...current, project]);
+      rememberDeviceWorkspacePath(project.id, workspacePath);
+      const codexProject = hostContext?.projects?.find(
+        (candidate) => candidate.workspacePath === workspacePath,
+      );
+      const codexProjectKind = codexProject?.projectKind;
+      const codexHostId = codexProject?.hostId;
+      if (codexProject && codexProjectKind && codexHostId) {
+        const codexIdentity: CodexProjectIdentity = {
+          codexProjectId: codexProject.id,
+          codexProjectKind,
+          codexHostId,
+          workspacePath,
+        };
+        setProjectCodexIdentities((current) => {
+          const next = { ...current, [project.id]: codexIdentity };
+          taskboardStorage.setItem(PROJECT_CODEX_IDENTITIES_KEY, JSON.stringify(next));
+          return next;
+        });
+      }
+      setWorkspaceAddOpen(false);
+      setWorkspaceAddPath("");
       changeProject(project.id);
     } catch (error) {
       setActionError(errorMessage(error));
@@ -3398,7 +3508,12 @@ export function App() {
     setDeletingProjectId(project.id);
     setActionError(null);
     try {
-      await deleteProjectRequest(project.id);
+      if (project.id === JIRA_PROJECT_ID) {
+        await disconnectJiraConnection();
+        setJiraConnection(null);
+      } else {
+        await deleteProjectRequest(project.id);
+      }
       setProjects((current) => current.filter((candidate) => candidate.id !== project.id));
       setRecentProjectIds((current) => {
         const next = current.filter((candidate) => candidate !== project.id);
@@ -3554,7 +3669,7 @@ export function App() {
                             role="menuitemradio"
                             aria-checked={project.id === selectedProjectId}
                             disabled={openingProjectId !== null}
-                            onContextMenu={![GLOBAL_PROJECT_ID, JIRA_PROJECT_ID].includes(project.id) ? (event) => {
+                            onContextMenu={project.id !== GLOBAL_PROJECT_ID ? (event) => {
                               event.preventDefault();
                               setProjectContextMenu({
                                 project,
@@ -3591,6 +3706,15 @@ export function App() {
                             ? text("Jira 设置", "Jira settings")
                             : text("连接 Jira", "Connect Jira")}
                         </span>
+                      </button>
+                      <button
+                        type="button"
+                        role="menuitem"
+                        disabled={openingProjectId !== null}
+                        onClick={openAddWorkspaceDialog}
+                      >
+                        <PlusIcon className="project-avatar" color="currentColor" size={16} />
+                        <span>{text("添加工作区", "Add workspace")}</span>
                       </button>
                       <button
                         type="button"
@@ -4070,7 +4194,9 @@ export function App() {
             onClick={() => requestProjectDelete(projectContextMenu.project)}
           >
             <span className="context-menu-icon" aria-hidden="true"><DeleteIcon color="currentColor" /></span>
-            <span className="context-menu-label">{text("删除项目", "Delete project")}</span>
+            <span className="context-menu-label">{projectContextMenu.project.id === JIRA_PROJECT_ID
+              ? text("断开 Jira 连接并删除项目", "Disconnect Jira and delete project")
+              : text("删除项目", "Delete project")}</span>
           </button>
         </div>
       )}
@@ -4142,6 +4268,72 @@ export function App() {
         </div>
       )}
 
+      {workspaceAddOpen && (
+        <div
+          className="delete-backdrop"
+          onPointerDown={(event) => {
+            if (event.target === event.currentTarget) closeAddWorkspaceDialog();
+          }}
+        >
+          <form
+            className="delete-dialog project-create-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="workspace-add-title"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void createWorkspaceProject();
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") closeAddWorkspaceDialog();
+            }}
+          >
+            <h2 id="workspace-add-title">{text("添加工作区", "Add workspace")}</h2>
+            <label>
+              <span>{text("本地项目路径", "Local project path")}</span>
+              <div style={{ display: "flex", gap: "8px" }}>
+                <input
+                  type="text"
+                  maxLength={500}
+                  required
+                  placeholder={text("点击右侧按钮选择本地目录", "Click the button to pick a local directory")}
+                  value={workspaceAddPath}
+                  onChange={(event) => setWorkspaceAddPath(event.target.value)}
+                  style={{ flex: 1 }}
+                />
+                <button
+                  type="button"
+                  className="button secondary"
+                  onClick={() => void chooseWorkspaceDirectory()}
+                >
+                  {text("选择", "Select")}
+                </button>
+              </div>
+            </label>
+            {actionErrorText && <p className="project-dialog-error">{actionErrorText}</p>}
+            <div>
+              <button
+                className="button secondary"
+                type="button"
+                disabled={openingProjectId !== null}
+                onClick={closeAddWorkspaceDialog}
+              >
+                {text("取消", "Cancel")}
+              </button>
+              <button
+                className="button primary"
+                type="submit"
+                disabled={!workspaceAddPath.trim() || openingProjectId !== null}
+              >
+                {openingProjectId
+                  ? text("添加中…", "Adding…")
+                  : text("添加", "Add")}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
       {pendingProjectDelete && (
         <div
           className="delete-backdrop"
@@ -4160,11 +4352,17 @@ export function App() {
           >
             {projectDeleteIssueCount === null ? (
               <>
-                <h2 id="project-delete-title">{text(
+                <h2 id="project-delete-title">{pendingProjectDelete.id === JIRA_PROJECT_ID ? text(
+                  `断开 Jira 连接并删除项目“${pendingProjectDelete.name}”？`,
+                  `Disconnect Jira and delete project “${pendingProjectDelete.name}”?`,
+                ) : text(
                   `删除项目“${pendingProjectDelete.name}”？`,
                   `Delete project “${pendingProjectDelete.name}”?`,
                 )}</h2>
-                <p>{text(
+                <p>{pendingProjectDelete.id === JIRA_PROJECT_ID ? text(
+                  "将清除已保存的 Jira 连接，并删除本地所有 Jira 同步议题。此操作无法恢复。",
+                  "This clears the saved Jira connection and deletes all locally synced Jira issues. This cannot be undone.",
+                ) : text(
                   "仅空项目可以删除。删除后无法恢复。",
                   "Only empty projects can be deleted. This cannot be undone.",
                 )}</p>
@@ -4185,7 +4383,9 @@ export function App() {
                   >
                     {deletingProjectId
                       ? text("删除中…", "Deleting…")
-                      : text("删除项目", "Delete project")}
+                      : pendingProjectDelete.id === JIRA_PROJECT_ID
+                        ? text("断开并删除", "Disconnect and delete")
+                        : text("删除项目", "Delete project")}
                   </button>
                 </div>
               </>

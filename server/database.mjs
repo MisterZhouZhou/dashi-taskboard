@@ -1489,6 +1489,18 @@ export class TaskboardDatabase {
     return project;
   }
 
+  deleteJiraProject() {
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      this.database.prepare("DELETE FROM tasks WHERE project_id = ?").run(JIRA_PROJECT_ID);
+      this.database.prepare("DELETE FROM projects WHERE id = ?").run(JIRA_PROJECT_ID);
+      this.database.exec("COMMIT");
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
   getProject(id) {
     const row = this.database.prepare(`
       SELECT
