@@ -12385,3 +12385,12 @@ kbd {
 .issue-task-tree > .issue-relation-picker:last-child {
   margin-top: 7px;
 }
+
+.detail-delete-action {
+  color: var(--danger);
+}
+
+.detail-delete-action:hover:not(:disabled) {
+  background: var(--danger-soft);
+  color: var(--danger);
+}

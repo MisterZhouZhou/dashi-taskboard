@@ -132,6 +132,7 @@ interface TaskDetailProps {
   onOpenThread: (binding: CodexThreadBinding) => void;
   onOpenLegacyLocalThread: (threadId: string) => void;
   onOpenInThread: (task: Task) => void;
+  onDelete: (task: Task) => void;
   onCopy: (text: string, announcement: string) => void;
   openingThread: boolean;
   /** Project auto-claim state, so "run now" can reflect an in-flight turn. */
@@ -237,7 +238,7 @@ const ACTIVITY_FIELD_LABELS: Record<string, readonly [string, string]> = {
   priority: ["优先级", "priority"],
   labels: ["标签", "labels"],
   assignee: ["负责人", "assignee"],
-  developmentContext: ["开发上下文", "development context"],
+  developmentContext: ["执行环境", "execution environment"],
   startDate: ["开始日期", "start date"],
   dueDate: ["截止日期", "due date"],
   recurrence: ["重复", "recurrence"],
@@ -407,6 +408,7 @@ export function TaskDetail({
   onOpenThread,
   onOpenLegacyLocalThread,
   onOpenInThread,
+  onDelete,
   onCopy,
   openingThread,
   autoClaim,
@@ -416,6 +418,7 @@ export function TaskDetail({
   const { language, locale, text } = useTaskboardI18n();
   const [currentTask, setCurrentTask] = useState(task);
   const [title, setTitle] = useState(task.title);
+  const [titleFocused, setTitleFocused] = useState(false);
   const [description, setDescription] = useState(task.description);
   const [descriptionSegments, setDescriptionSegments] = useState<InlineMediaSegment[]>(
     () => createInlineMediaSegments(task.description, referenceTasks),
@@ -520,12 +523,13 @@ export function TaskDetail({
     if (taskChanged) {
       setEditingDescription(false);
       setChangeStatusToTodo(false);
+      setTitleFocused(false);
     }
   }, [task]);
 
   useEffect(() => {
     resizeTextarea(titleRef.current);
-  }, [title]);
+  }, [title, titleFocused]);
 
   useEffect(() => {
     if (!editingDescription) return;
@@ -1048,10 +1052,20 @@ export function TaskDetail({
     });
   }
 
-  const developmentOptions = [...developmentScan.contexts];
+  // 主 worktree 与默认「当前工作区」指向同一目录，选项里不重复列出；
+  // 已绑定主 worktree 的任务也按默认项展示，不再单独列出绑定值。
+  const boundToPrimaryWorktree = currentTask.developmentContext?.type === "worktree"
+    && currentTask.developmentContext.path === developmentScan.workspacePath;
+  const developmentOptions = developmentScan.contexts.filter((context) => !(
+    context.type === "worktree" && context.path === developmentScan.workspacePath
+  ));
+  const developmentValue = currentTask.developmentContext && !boundToPrimaryWorktree
+    ? contextValue(currentTask.developmentContext)
+    : "";
   if (
     currentTask.developmentContext
-    && !developmentOptions.some((context) => contextValue(context) === contextValue(currentTask.developmentContext))
+    && developmentValue
+    && !developmentOptions.some((context) => contextValue(context) === developmentValue)
   ) {
     developmentOptions.unshift(currentTask.developmentContext);
   }
@@ -1094,15 +1108,21 @@ export function TaskDetail({
                   ref={titleRef}
                   className="issue-title-input"
                   rows={1}
-                  value={title}
+                  value={titleFocused || !currentTask.relations.parent
+                    ? title
+                    : `${currentTask.relations.parent.title}/${title}`}
                   aria-label={text("议题标题", "Issue title")}
                   disabled={savingProperty === "title"}
+                  onFocus={() => setTitleFocused(true)}
                   onChange={(event) => {
                     setTitle(event.target.value.replace(/\n/g, ""));
                     resizeTextarea(event.currentTarget);
                   }}
                   onKeyDown={handleTitleKeyDown}
-                  onBlur={() => void saveTitle()}
+                  onBlur={() => {
+                    setTitleFocused(false);
+                    void saveTitle();
+                  }}
                 />
                 {editingDescription ? (
                   <div
@@ -1704,7 +1724,7 @@ export function TaskDetail({
                 <NewConversationIcon color="currentColor" />
                 <span>{openingThread
                   ? text("正在打开…", "Opening…")
-                  : text("在新对话打开", "Open in new conversation")}</span>
+                  : text("在 Codex 中打开", "Open in Codex")}</span>
               </button>
               {currentTask.externalUrl && (
                 <a
@@ -1749,6 +1769,14 @@ export function TaskDetail({
               >
                 <span className="detail-copy-action-icon" aria-hidden="true"><img src={copyLinkIcon} alt="" /></span>
                 <span className="detail-copy-action-label">{text("复制链接", "Copy link")}</span>
+              </button>
+              <button
+                className="detail-copy-action detail-delete-action"
+                type="button"
+                onClick={() => onDelete(currentTask)}
+              >
+                <span className="detail-copy-action-icon" aria-hidden="true"><DeleteIcon color="currentColor" size={14} /></span>
+                <span className="detail-copy-action-label">{text("删除议题", "Delete issue")}</span>
               </button>
             </div>
             <h2>{text("属性", "Properties")}</h2>
@@ -1907,16 +1935,21 @@ export function TaskDetail({
               </div>
             )}
             <div className="detail-property-row development-property">
-              <span className="detail-property-label">{text("开发上下文", "Development context")}</span>
+              <span className="detail-property-label">{text("执行环境", "Execution environment")}</span>
               <TaskPropertyPicker
-                value={contextValue(currentTask.developmentContext)}
+                value={developmentValue}
                 options={[
                   {
                     value: "",
                     label: developmentScanLoading
                       ? text("正在扫描 Git…", "Scanning Git…")
-                      : text("未绑定", "Not linked"),
-                    icon: <BranchIcon color="currentColor" size={14} />,
+                      : developmentScan.workspacePath
+                        ? `${text("当前工作区", "Current workspace")} · ${
+                          developmentScan.workspacePath.split(/[\\/]/).filter(Boolean).at(-1)
+                            ?? developmentScan.workspacePath
+                        }`
+                        : text("未绑定", "Not linked"),
+                    icon: <LinearIcon name="folder" />,
                   },
                   ...developmentOptions.map((context) => ({
                     value: contextValue(context),
@@ -1931,8 +1964,10 @@ export function TaskDetail({
                 className="detail-property-picker"
                 popoverClassName="development-context-popover"
                 triggerClassName="detail-property-trigger"
-                ariaLabel={text("开发上下文", "Development context")}
-                title={currentTask.developmentContext?.type === "worktree" ? currentTask.developmentContext.path : undefined}
+                ariaLabel={text("执行环境", "Execution environment")}
+                title={currentTask.developmentContext?.type === "worktree"
+                  ? currentTask.developmentContext.path
+                  : currentTask.developmentContext ? undefined : developmentScan.workspacePath ?? undefined}
                 onOpenChange={(open) => setPropertyMenu(open ? "development" : null)}
                 onChange={(value) => void saveTask({
                   developmentContext: value ? JSON.parse(value) as DevelopmentContext : null,

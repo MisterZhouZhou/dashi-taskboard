@@ -1344,7 +1344,7 @@ export class TaskboardDatabase {
           ?, ?, ?, ?,
           ?, ?, ?, ?,
           NULL, NULL, NULL,
-          NULL, ?, NULL, NULL,
+          ?, ?, NULL, NULL,
           'jira', ?, ?, ?, ?,
           NULL, 1, ?, ?
         )
@@ -1354,7 +1354,7 @@ export class TaskboardDatabase {
           identifier = ?, title = ?, description = ?, status = ?, priority = ?, labels = ?,
           sort_order = ?, creator_type = ?, creator_id = ?, creator_name = ?, creator_avatar_url = ?,
           assignee_type = ?, assignee_id = ?, assignee_name = ?, assignee_avatar_url = ?,
-          due_date = ?, external_origin = ?, external_id = ?, external_key = ?, external_url = ?,
+          start_date = ?, due_date = ?, external_origin = ?, external_id = ?, external_key = ?, external_url = ?,
           archived_at = NULL,
           version = version + 1, updated_at = ?
         WHERE id = ?
@@ -1383,6 +1383,7 @@ export class TaskboardDatabase {
             issue.assignee.id,
             issue.assignee.name,
             issue.assignee.avatarUrl,
+            issue.startDate,
             issue.dueDate,
             issue.externalOrigin,
             issue.externalId,
@@ -1409,6 +1410,7 @@ export class TaskboardDatabase {
           || existing.assignee_id !== issue.assignee.id
           || existing.assignee_name !== issue.assignee.name
           || existing.assignee_avatar_url !== issue.assignee.avatarUrl
+          || existing.start_date !== issue.startDate
           || existing.due_date !== issue.dueDate
           || existing.external_origin !== issue.externalOrigin
           || existing.external_id !== issue.externalId
@@ -1432,6 +1434,7 @@ export class TaskboardDatabase {
           issue.assignee.id,
           issue.assignee.name,
           issue.assignee.avatarUrl,
+          issue.startDate,
           issue.dueDate,
           issue.externalOrigin,
           issue.externalId,
@@ -1499,6 +1502,13 @@ export class TaskboardDatabase {
       this.database.exec("ROLLBACK");
       throw error;
     }
+  }
+
+  setProjectWorkspace(projectId, workspacePath) {
+    this.database.prepare(`
+      UPDATE projects SET workspace_path = ?, updated_at = ? WHERE id = ?
+    `).run(workspacePath, now(), projectId);
+    return this.getProject(projectId);
   }
 
   getProject(id) {
@@ -2757,15 +2767,21 @@ export class TaskboardDatabase {
     try {
       const current = this.#requireTask(id);
       this.#requireVersion(current, version);
-      if (current.archivedAt === null) {
+      // Jira 任务只做本地删除（不要求先归档），下次同步按 JQL 重新拉取。
+      const jira = current.source === "jira";
+      if (!jira && current.archivedAt === null) {
         throw new ApiError(409, "TASK_NOT_ARCHIVED", "Only archived tasks can be deleted");
       }
       const attachmentIds = this.database.prepare(
         "SELECT id FROM attachments WHERE task_id = ? ORDER BY created_at, id",
       ).all(current.id).map((attachment) => attachment.id);
-      const result = this.database.prepare(
-        "DELETE FROM tasks WHERE id = ? AND version = ? AND archived_at IS NOT NULL",
-      ).run(current.id, version);
+      const result = jira
+        ? this.database.prepare(
+          "DELETE FROM tasks WHERE id = ? AND version = ?",
+        ).run(current.id, version)
+        : this.database.prepare(
+          "DELETE FROM tasks WHERE id = ? AND version = ? AND archived_at IS NOT NULL",
+        ).run(current.id, version);
       if (result.changes !== 1) this.#throwMissingOrConflict(id, version);
       this.database.exec("COMMIT");
       return { task: current, attachmentIds };

@@ -3334,10 +3334,6 @@ export function createTaskboardServer(options = {}) {
           return sendJson(response, 200, { task });
         }
         if (!action && request.method === "DELETE") {
-          const current = database.getTask(id);
-          if (current?.source === "jira") {
-            throw new ApiError(409, "JIRA_DELETE_UNAVAILABLE", "Jira 任务不能从 Taskboard 永久删除");
-          }
           const { version } = parseArchive(await readJson(request));
           const deleted = database.deleteArchivedTask(id, version);
           for (const attachmentId of deleted.attachmentIds) {

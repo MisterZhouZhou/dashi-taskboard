@@ -1,4 +1,7 @@
 import { createHash } from "node:crypto";
+import { mkdir, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 
 import { JIRA_PROJECT_ID } from "../shared/domain.mjs";
 import { ApiError } from "./database.mjs";
@@ -26,7 +29,10 @@ export function buildJiraJql(projects = []) {
   const projectFilter = projects.length > 0
     ? ` AND project in (${projects.map(quoteJqlString).join(", ")})`
     : "";
-  return `assignee = currentUser()${projectFilter} AND (statusCategory != Done OR updated >= -30d) ORDER BY updated DESC`;
+  return `assignee = currentUser()${projectFilter}`
+    + ` AND status != ${quoteJqlString("产品验收")}`
+    + ` AND ((statusCategory != Done AND resolution = EMPTY) OR updated >= -30d)`
+    + ` ORDER BY updated DESC`;
 }
 
 function includesAny(value, terms) {
@@ -88,7 +94,7 @@ function legacyJiraOriginId(baseUrl) {
   return createHash("sha256").update(baseUrl).digest("hex").slice(0, 16);
 }
 
-function normalizeIssue(issue, config, index = 0) {
+function normalizeIssue(issue, config, index = 0, dateFieldIds) {
   const fields = issue?.fields ?? {};
   const externalId = String(issue.id);
   const externalKey = limitedString(issue.key, "JIRA", 128);
@@ -102,6 +108,10 @@ function normalizeIssue(issue, config, index = 0) {
       return normalized ? [normalized] : [];
     }))].slice(0, 20)
     : [];
+  const startDate = dateFieldIds?.start
+    && typeof fields[dateFieldIds.start] === "string" ? fields[dateFieldIds.start] : null;
+  const completionDate = dateFieldIds?.due
+    && typeof fields[dateFieldIds.due] === "string" ? fields[dateFieldIds.due] : null;
   return {
     id: internalId,
     identifier: internalId,
@@ -113,7 +123,8 @@ function normalizeIssue(issue, config, index = 0) {
     sortOrder: (index + 1) * 1024,
     creator: reporter,
     assignee,
-    dueDate: typeof fields.duedate === "string" ? fields.duedate : null,
+    startDate,
+    dueDate: typeof fields.duedate === "string" ? fields.duedate : completionDate,
     externalOrigin: config.originId,
     externalId,
     externalKey,
@@ -150,6 +161,23 @@ function safeConfig(config, lastSyncedAt = null) {
 export function createJiraIntegration({ configStore, database, fetch: fetchImplementation = globalThis.fetch }) {
   let lastSyncedAt = null;
   let pendingSync = null;
+
+  /** 自定义日期字段（如“任务开始时间/任务完成时间”）按名称解析一次并缓存。 */
+  let customDateFieldIds = null;
+
+  async function resolveCustomDateFieldIds(config) {
+    if (customDateFieldIds) return customDateFieldIds;
+    customDateFieldIds = { start: null, due: null };
+    try {
+      const fields = await request(config, "/rest/api/2/field");
+      for (const field of Array.isArray(fields) ? fields : []) {
+        if (field?.schema?.type !== "date" || typeof field.name !== "string") continue;
+        if (field.name.includes("任务开始时间")) customDateFieldIds.start = field.id;
+        else if (field.name.includes("任务完成时间")) customDateFieldIds.due = field.id;
+      }
+    } catch {}
+    return customDateFieldIds;
+  }
 
   async function request(config, pathname, init = {}) {
     const controller = new AbortController();
@@ -203,7 +231,24 @@ export function createJiraIntegration({ configStore, database, fetch: fetchImple
     }
   }
 
+  /** Jira 项目没有本地目录；连接成功后在用户根目录创建默认工作区。 */
+  function defaultJiraWorkspacePath() {
+    return path.join(os.homedir(), "dashi-taskboard-jira");
+  }
+
+  async function ensureJiraWorkspace() {
+    const project = database.getProject(JIRA_PROJECT_ID);
+    if (project?.workspacePath) return;
+    const workspacePath = defaultJiraWorkspacePath();
+    await mkdir(workspacePath, { recursive: true });
+    database.setProjectWorkspace(JIRA_PROJECT_ID, workspacePath);
+  }
+
   async function fetchAssignedIssues(config) {
+    const dateFieldIds = await resolveCustomDateFieldIds(config);
+    const fields = [...JIRA_FIELDS];
+    if (dateFieldIds.start && !fields.includes(dateFieldIds.start)) fields.push(dateFieldIds.start);
+    if (dateFieldIds.due && !fields.includes(dateFieldIds.due)) fields.push(dateFieldIds.due);
     const issues = [];
     let startAt = 0;
     while (true) {
@@ -213,7 +258,7 @@ export function createJiraIntegration({ configStore, database, fetch: fetchImple
           jql: buildJiraJql(config.projects),
           startAt,
           maxResults: 100,
-          fields: JIRA_FIELDS,
+          fields,
         }),
       });
       const pageIssues = Array.isArray(page?.issues) ? page.issues : [];
@@ -261,10 +306,12 @@ export function createJiraIntegration({ configStore, database, fetch: fetchImple
       await assertLiveOrigin(config);
       issues = await fetchAssignedIssues(config);
     }
+    const dateFieldIds = await resolveCustomDateFieldIds(config);
     database.syncJiraTasks(
-      issues.map((issue, index) => normalizeIssue(issue, config, index)),
+      issues.map((issue, index) => normalizeIssue(issue, config, index, dateFieldIds)),
       { archiveMissing, projectName: `Jira · ${config.displayName}`, legacyIdentity },
     );
+    await ensureJiraWorkspace();
     if (storedConfig.version === 1) config = await configStore.save(config);
     lastSyncedAt = new Date().toISOString();
     return safeConfig(config, lastSyncedAt);
@@ -375,8 +422,9 @@ export function createJiraIntegration({ configStore, database, fetch: fetchImple
       const legacyIdentity = current?.version === 1
         ? { urlHash: legacyJiraOriginId(current.baseUrl), originId: config.originId }
         : null;
+      const dateFieldIds = await resolveCustomDateFieldIds(config);
       database.syncJiraTasks(
-        issues.map((issue, index) => normalizeIssue(issue, config, index)),
+        issues.map((issue, index) => normalizeIssue(issue, config, index, dateFieldIds)),
         {
           archiveMissing: true,
           projectName: `Jira · ${config.displayName}`,
@@ -384,6 +432,7 @@ export function createJiraIntegration({ configStore, database, fetch: fetchImple
         },
       );
       const savedConfig = await configStore.save(config);
+      await ensureJiraWorkspace();
       lastSyncedAt = new Date().toISOString();
       return safeConfig(savedConfig, lastSyncedAt);
     },
@@ -391,6 +440,11 @@ export function createJiraIntegration({ configStore, database, fetch: fetchImple
     async disconnect() {
       await configStore.clear();
       lastSyncedAt = null;
+      // 断开时删除系统自动创建的默认工作区；若工作区指向其他路径则保留不动。
+      const project = database.getProject(JIRA_PROJECT_ID);
+      if (project?.workspacePath === defaultJiraWorkspacePath()) {
+        await rm(project.workspacePath, { recursive: true, force: true });
+      }
       database.deleteJiraProject();
     },
     async reconcile() {

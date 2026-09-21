@@ -810,6 +810,8 @@ export function App() {
   const [restoringTaskId, setRestoringTaskId] = useState<string | null>(null);
   const [pendingArchivedTaskDelete, setPendingArchivedTaskDelete] = useState<Task | null>(null);
   const [deletingArchivedTaskId, setDeletingArchivedTaskId] = useState<string | null>(null);
+  const [pendingTaskDelete, setPendingTaskDelete] = useState<Task | null>(null);
+  const [deletingTaskId, setDeletingTaskId] = useState<string | null>(null);
   const [editor, setEditor] = useState<EditorState | null>(null);
   const [newTaskDraft, setNewTaskDraft] = useState<{
     projectId: string;
@@ -2993,6 +2995,42 @@ export function App() {
     }
   }
 
+  async function deletePendingTask() {
+    if (!pendingTaskDelete || deletingTaskId) return;
+    const task = pendingTaskDelete;
+    setDeletingTaskId(task.id);
+    setActionError(null);
+    try {
+      // Jira 任务一步本地删除（下次同步按 JQL 重新拉取）；
+      // 本地任务服务端仅允许删除已归档议题：先归档拿到新版本，再永久删除。
+      if (task.source === "jira") {
+        await deleteArchivedTaskRequest(task);
+      } else {
+        const archived = await archiveTaskRequest(task);
+        await deleteArchivedTaskRequest(archived);
+      }
+      setTasks((current) => current.filter((candidate) => candidate.id !== task.id));
+      setArchivedTasks((current) => current.filter((candidate) => candidate.id !== task.id));
+      setPendingTaskDelete(null);
+      if (detailTaskIdentifier === task.identifier) setDetailTaskIdentifier(null);
+      setAnnouncement(text(
+        `${task.identifier} 已永久删除。`,
+        `${task.identifier} was permanently deleted.`,
+      ));
+    } catch (error) {
+      setActionError(error instanceof ApiError && error.code === "VERSION_CONFLICT"
+        ? text(
+          "该议题已在其他位置更新，看板已重新同步。",
+          "This issue changed elsewhere. The board has been synced.",
+        )
+        : errorMessage(error));
+      setPendingTaskDelete(null);
+      if (taskScopeProjectId) void refreshTasks(taskScopeProjectId, { quiet: true });
+    } finally {
+      setDeletingTaskId(null);
+    }
+  }
+
   async function copyText(content: string, message: string) {
     try {
       await navigator.clipboard.writeText(content);
@@ -3969,6 +4007,7 @@ export function App() {
             onOpenThread={openThread}
             onOpenLegacyLocalThread={openLegacyLocalThread}
             onOpenInThread={openTaskInThread}
+            onDelete={setPendingTaskDelete}
             onCopy={(text, message) => void copyText(text, message)}
             openingThread={openingThreadTaskId === detailTask.id}
             onError={setActionError}
@@ -4187,6 +4226,23 @@ export function App() {
           )}
           style={{ left: projectContextMenu.x, top: projectContextMenu.y }}
         >
+          {projectContextMenu.project.id === JIRA_PROJECT_ID && (
+            <button
+              className="context-menu-item"
+              type="button"
+              role="menuitem"
+              disabled={jiraSyncing}
+              onClick={() => {
+                setProjectContextMenu(null);
+                void syncJiraNow();
+              }}
+            >
+              <span className="context-menu-icon" aria-hidden="true"><RefreshIcon color="currentColor" /></span>
+              <span className="context-menu-label">{jiraSyncing
+                ? text("同步中…", "Syncing…")
+                : text("同步 Jira", "Sync Jira")}</span>
+            </button>
+          )}
           <button
             className="context-menu-item is-danger"
             type="button"
@@ -4331,6 +4387,54 @@ export function App() {
               </button>
             </div>
           </form>
+        </div>
+      )}
+
+      {pendingTaskDelete && (
+        <div
+          className="delete-backdrop"
+          onPointerDown={(event) => {
+            if (event.target === event.currentTarget && !deletingTaskId) setPendingTaskDelete(null);
+          }}
+        >
+          <div
+            className="delete-dialog"
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="task-delete-title"
+            onKeyDown={(event) => {
+              if (event.key === "Escape" && !deletingTaskId) setPendingTaskDelete(null);
+            }}
+          >
+            <h2 id="task-delete-title">{text(
+              `永久删除“${pendingTaskDelete.title}”？`,
+              `Permanently delete “${pendingTaskDelete.title}”?`,
+            )}</h2>
+            <p>{text(
+              "该议题及其评论、附件将被永久删除，无法恢复。",
+              "This issue, its comments, and attachments will be permanently deleted.",
+            )}</p>
+            <div>
+              <button
+                className="button secondary"
+                type="button"
+                disabled={deletingTaskId !== null}
+                onClick={() => setPendingTaskDelete(null)}
+              >
+                {text("取消", "Cancel")}
+              </button>
+              <button
+                className="button danger"
+                type="button"
+                disabled={deletingTaskId !== null}
+                onClick={() => void deletePendingTask()}
+              >
+                {deletingTaskId
+                  ? text("删除中…", "Deleting…")
+                  : text("删除", "Delete")}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
