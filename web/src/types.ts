@@ -385,6 +385,7 @@ export interface AiChatThread {
   status: AiChatThreadStatus;
   origin: AiChatOrigin;
   codexThreadId: string | null;
+  agent?: "codex" | "claude-code";
   model: string;
   reasoningEffort: string;
   sandbox: AiChatSandbox;
@@ -609,6 +610,27 @@ export interface HostContext {
     completed: number;
     total: number;
   };
+}
+
+export interface ResourceCalendarIssue {
+  key: string;
+  parentKey: string;
+  parentSummary: string | null;
+  summary: string;
+  description: string;
+  done: boolean;
+  start: string;
+  end: string;
+}
+
+export interface ResourceCalendarMonth {
+  month: string;
+  days: Array<{ day: number; iso: string; weekday: number; nonWorkday: boolean }>;
+  rows: Array<{
+    dept: string;
+    member: string;
+    cells: Array<{ nonWorkday: boolean; items: ResourceCalendarIssue[] }>;
+  }>;
 }
 
 export interface TaskDraft {

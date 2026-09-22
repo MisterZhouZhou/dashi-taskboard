@@ -163,6 +163,78 @@ function normalizedItem(rawType, item) {
   };
 }
 
+/** Claude Code 快捷聊天的一轮参数；resume 复用 codex_thread_id 存 session id。 */
+export function buildClaudeChatArgs(thread, addDirectories = []) {
+  const permission = thread.sandbox === "read-only"
+    ? "--permission-mode"
+    : thread.sandbox === "workspace-write"
+      ? "--permission-mode"
+      : "--dangerously-skip-permissions";
+  const args = [
+    "-p",
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--add-dir",
+    thread.origin.workspacePath,
+    ...(thread.sandbox === "danger-full-access" ? [] : [permission,
+      thread.sandbox === "read-only" ? "plan" : "acceptEdits"]),
+    ...addDirectories.flatMap((directory) => ["--add-dir", directory]),
+  ];
+  if (thread.model) args.push("--model", thread.model);
+  if (thread.codexThreadId) args.push("--resume", thread.codexThreadId);
+  return args;
+}
+
+/** 把 Claude Code stream-json 事件映射为面板统一的聊天事件。 */
+export function normalizeClaudeChatEvent(raw) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  if (raw.type === "system" && raw.subtype === "init") {
+    if (typeof raw.session_id !== "string" || !raw.session_id) return null;
+    return { kind: "thread.started", threadId: raw.session_id };
+  }
+  if (raw.type === "assistant") {
+    const blocks = Array.isArray(raw.message?.content) ? raw.message.content : [];
+    const text = blocks
+      .filter((block) => block?.type === "text" && typeof block.text === "string")
+      .map((block) => block.text)
+      .join("\n");
+    if (text) {
+      return { kind: "event", type: "agent_message", role: "assistant", content: text, data: undefined };
+    }
+    const toolUse = blocks.find((block) => block?.type === "tool_use");
+    if (toolUse) {
+      return {
+        kind: "event",
+        type: "tool_call",
+        role: "activity",
+        content: String(toolUse.name ?? "tool"),
+        data: { name: toolUse.name, input: toolUse.input ?? null },
+      };
+    }
+    return null;
+  }
+  if (raw.type === "result") {
+    if (raw.is_error === true || raw.subtype === "error_during_execution") {
+      return {
+        kind: "event",
+        type: "turn.failed",
+        role: "error",
+        content: String(raw.result ?? raw.subtype ?? "Claude Code turn failed"),
+        data: { status: "failed" },
+      };
+    }
+    return {
+      kind: "event",
+      type: "turn.completed",
+      role: "activity",
+      content: "",
+      data: { status: "completed" },
+    };
+  }
+  return null;
+}
+
 export function buildCodexArgs(thread, addDirectories, imagePaths = []) {
   const permission = thread.sandbox === "read-only"
     ? {
@@ -186,6 +258,7 @@ export function buildCodexArgs(thread, addDirectories, imagePaths = []) {
     "--json",
     "--color",
     "never",
+    "--skip-git-repo-check",
     "-C",
     thread.origin.workspacePath,
     "-s",
@@ -469,7 +542,7 @@ export function spawnCodexTurn({
       rejectCompletion(fatalError);
       return;
     }
-    resolveCompletion({ exitCode, signal });
+    resolveCompletion({ exitCode, signal, stderr: stderrBuffer.toString("utf8") });
   });
   child.stdin.on("error", () => {});
   child.stdio[3].on("error", () => {});

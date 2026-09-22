@@ -115,7 +115,7 @@ interface AiChatProps {
   openThreadRequest?: AiChatOpenThreadRequest | null;
 }
 
-type MenuName = "model" | "model-list" | "effort-list" | "sandbox" | null;
+type MenuName = "model" | "model-list" | "effort-list" | "sandbox" | "agent" | "claude-model" | null;
 type ComposerDraftNode =
   | ComposerDocument["nodes"][number]
   | ComposerPersistedDocument["nodes"][number];
@@ -260,6 +260,19 @@ const SANDBOX_DESCRIPTIONS: Record<AiChatSandbox, readonly [string, string]> = {
   "read-only": ["编辑外部文件和使用互联网时始终询问", "Always ask before editing external files or using the internet"],
   "workspace-write": ["仅对检测到的风险操作请求批准", "Ask only for operations that are detected as risky"],
   "danger-full-access": ["不受限制地访问互联网和您电脑上的任何文件", "Access the internet and any file on your computer without restrictions"],
+};
+
+// Claude Code 执行器的权限档位文案（plan / acceptEdits / 跳过确认）。
+const CLAUDE_SANDBOX_LABELS: Record<AiChatSandbox, readonly [string, string]> = {
+  "read-only": ["只读规划", "Plan only"],
+  "workspace-write": ["自动接受编辑", "Accept edits"],
+  "danger-full-access": ["跳过权限确认", "Skip permissions"],
+};
+
+const CLAUDE_SANDBOX_DESCRIPTIONS: Record<AiChatSandbox, readonly [string, string]> = {
+  "read-only": ["仅允许读取和检索，不能修改文件", "Read and search only; no file edits"],
+  "workspace-write": ["自动接受工作区内的文件编辑", "Automatically accept edits inside the workspace"],
+  "danger-full-access": ["本次对话不做任何权限拦截", "No permission prompts for this conversation"],
 };
 
 function SandboxIcon({ sandbox }: { sandbox: AiChatSandbox }) {
@@ -1338,6 +1351,7 @@ export function AiChat({
   const [pendingDangerInput, setPendingDangerInput] = useState<PendingDangerInput | null>(null);
   const [unread, setUnread] = useState(false);
   const [draftModel, setDraftModel] = useState("");
+  const [draftAgent, setDraftAgent] = useState<"codex" | "claude-code">("codex");
   const [draftEffort, setDraftEffort] = useState("");
   const [draftSandbox, setDraftSandbox] = useState<AiChatSandbox>("workspace-write");
   const [settingsSaving, setSettingsSaving] = useState(false);
@@ -1724,6 +1738,7 @@ export function AiChat({
     setDraftModel(thread.model);
     setDraftEffort(thread.reasoningEffort);
     setDraftSandbox(thread.sandbox);
+    setDraftAgent(thread.agent === "claude-code" ? "claude-code" : "codex");
   }, []);
 
   useEffect(() => {
@@ -2068,14 +2083,17 @@ export function AiChat({
         : targetCatalog.sandboxes.find(
           (candidate): candidate is AiChatSandbox => candidate === "workspace-write",
         ) ?? targetCatalog.sandboxes.find(isAiChatSandbox) ?? inheritedSettings.sandbox;
-      const settings = {
-        model: normalized?.model ?? inheritedSettings.model,
-        reasoningEffort: normalized?.reasoningEffort ?? inheritedSettings.reasoningEffort,
-        sandbox,
-      };
+      const settings = draftAgent === "claude-code"
+        ? { model: draftModel.trim(), reasoningEffort: "", sandbox }
+        : {
+          model: normalized?.model ?? inheritedSettings.model,
+          reasoningEffort: normalized?.reasoningEffort ?? inheritedSettings.reasoningEffort,
+          sandbox,
+        };
       const thread = await createAiChatThread({
         ...input,
         ...settings,
+        ...(draftAgent === "claude-code" ? { agent: "claude-code" } : {}),
       });
       replaceThread(thread);
       selectThread(thread.id);
@@ -3004,7 +3022,9 @@ export function AiChat({
                 {snapshot.thread.status === "running" && (
                   <div className="ai-chat-running" role="status">
                     <span className="ai-chat-spinner" />
-                    {text("Codex 正在处理", "Codex is working")}
+                    {draftAgent === "claude-code"
+                      ? text("Claude Code 正在处理", "Claude Code is working")
+                      : text("Codex 正在处理", "Codex is working")}
                   </div>
                 )}
                 {retryableUserEvent && (
@@ -3034,8 +3054,8 @@ export function AiChat({
                   : text("打开一个历史对话", "Open a chat from history")}</strong>
                 <p>{projectId
                   ? text(
-                    "Codex 会在新对话创建时记住当前项目。",
-                    "Codex will remember the current project when it creates the new chat.",
+                    "新对话会记住当前项目。",
+                    "New chats remember the current project.",
                   )
                   : text("进入项目后可以新建对话。", "Open a project to start a new chat.")}</p>
               </div>
@@ -3050,6 +3070,30 @@ export function AiChat({
                 : visibleError}</span>
             </div>
           )}
+
+          <div className="ai-chat-agent-row">
+            <span className="ai-chat-agent-label">{text("执行器", "Runtime")}</span>
+            <div className="ai-chat-agent-segment" role="radiogroup" aria-label={text("选择执行器", "Select runtime")}>
+              {([
+                ["codex", "Codex"],
+                ["claude-code", "Claude Code"],
+              ] as const).map(([value, label]) => (
+                <button
+                  key={value}
+                  type="button"
+                  role="radio"
+                  aria-checked={draftAgent === value}
+                  disabled={snapshot?.thread.status === "running" || settingsSaving}
+                  onClick={() => {
+                    setDraftAgent(value);
+                    setDraftModel("");
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
 
           <div
             className={`ai-chat-composer${attachmentDragActive ? " is-attachment-drag-active" : ""}`}
@@ -3100,9 +3144,9 @@ export function AiChat({
                 ref={editorRef}
                 className="ai-chat-composer-editor"
                 contentEditable={!composerBlocked}
-                data-placeholder={text("询问 Codex", "Ask Codex")}
+                data-placeholder={draftAgent === "claude-code" ? text("询问 Claude Code", "Ask Claude Code") : text("询问 Codex", "Ask Codex")}
                 role="textbox"
-                aria-label={text("发送给 Codex 的消息", "Message to Codex")}
+                aria-label={draftAgent === "claude-code" ? text("发送给 Claude Code 的消息", "Message to Claude Code") : text("发送给 Codex 的消息", "Message to Codex")}
                 aria-multiline="true"
                 aria-autocomplete="list"
                 aria-controls={composerQueryState ? "ai-chat-composer-candidates" : undefined}
@@ -3273,7 +3317,9 @@ export function AiChat({
                   onClick={() => setMenu((current) => current === "sandbox" ? null : "sandbox")}
                 >
                   <SandboxIcon sandbox={draftSandbox} />
-                  {text(...SANDBOX_LABELS[draftSandbox])}
+                  {text(...(draftAgent === "claude-code"
+                    ? CLAUDE_SANDBOX_LABELS[draftSandbox]
+                    : SANDBOX_LABELS[draftSandbox]))}
                   <LinearIcon name="chevronDown" />
                 </button>
                 {menu === "sandbox" && (
@@ -3283,7 +3329,7 @@ export function AiChat({
                     aria-label={text("执行权限", "Execution permissions")}
                   >
                     <header>
-                      <span>{text("应如何批准 Codex 操作？", "How should Codex operations be approved?")}</span>
+                      <span>{draftAgent === "claude-code" ? text("Claude Code 的权限档位", "Claude Code permission level") : text("应如何批准 Codex 操作？", "How should Codex operations be approved?")}</span>
                       <a
                         href="https://developers.openai.com/codex/security"
                         target="_blank"
@@ -3303,8 +3349,12 @@ export function AiChat({
                       >
                         <SandboxIcon sandbox={sandbox} />
                         <span>
-                          <strong>{text(...SANDBOX_LABELS[sandbox])}</strong>
-                          <small>{text(...SANDBOX_DESCRIPTIONS[sandbox])}</small>
+                          <strong>{text(...(draftAgent === "claude-code"
+                            ? CLAUDE_SANDBOX_LABELS[sandbox]
+                            : SANDBOX_LABELS[sandbox]))}</strong>
+                          <small>{text(...(draftAgent === "claude-code"
+                            ? CLAUDE_SANDBOX_DESCRIPTIONS[sandbox]
+                            : SANDBOX_DESCRIPTIONS[sandbox]))}</small>
                         </span>
                         {sandbox === draftSandbox && <LinearIcon name="check" />}
                       </button>
@@ -3315,6 +3365,22 @@ export function AiChat({
 
               <span className="ai-chat-toolbar-spacer" />
               <div className="ai-chat-menu-wrap ai-chat-model-menu-wrap">
+                {draftAgent === "claude-code" ? (
+                <button
+                  className="ai-chat-model-trigger"
+                  type="button"
+                  aria-haspopup="menu"
+                  aria-expanded={menu === "claude-model"}
+                  disabled={
+                    snapshot?.thread.status === "running"
+                    || settingsSaving
+                    || threadSettingsBlocked
+                  }
+                  onClick={() => setMenu((current) => (current === "claude-model" ? null : "claude-model"))}
+                >
+                  <span>{draftModel.trim() || text("默认模型", "Default model")}</span>
+                </button>
+                ) : (
                 <button
                   className="ai-chat-model-trigger"
                   type="button"
@@ -3332,7 +3398,7 @@ export function AiChat({
                       : "model"
                   ))}
                 >
-                  <span>{modelDisplayName(
+                <span>{modelDisplayName(
                     selectedModel?.displayName ?? (draftModel || text("模型", "Model")),
                   )}</span>
                   <span className="ai-chat-model-effort">
@@ -3342,6 +3408,35 @@ export function AiChat({
                   </span>
                   <LinearIcon name="chevronDown" />
                 </button>
+                )}
+                {draftAgent === "claude-code" && menu === "claude-model" && (
+                  <div
+                    className="ai-chat-option-menu ai-chat-config-menu"
+                    role="menu"
+                    aria-label={text("Claude 模型", "Claude model")}
+                  >
+                    {([
+                      ["", text("默认模型", "Default model")],
+                      ["sonnet", "Sonnet"],
+                      ["opus", "Opus"],
+                      ["haiku", "Haiku"],
+                    ] as const).map(([value, label]) => (
+                      <button
+                        key={value || "default"}
+                        type="button"
+                        role="menuitemradio"
+                        aria-checked={draftModel.trim() === value}
+                        onClick={() => {
+                          setDraftModel(value);
+                          setMenu(null);
+                        }}
+                      >
+                        <span>{label}</span>
+                        {draftModel.trim() === value && <LinearIcon name="check" />}
+                      </button>
+                    ))}
+                  </div>
+                )}
                 {menu === "model" && (
                   <div
                     className="ai-chat-option-menu ai-chat-config-menu"
@@ -3461,8 +3556,8 @@ export function AiChat({
               <div className="ai-chat-confirm" role="alertdialog" aria-modal="true" aria-labelledby="ai-chat-confirm-title">
                 <strong id="ai-chat-confirm-title">{text("允许完全访问？", "Allow full access?")}</strong>
                 <p>{text(
-                  "本次消息允许 Codex 访问工作区之外的文件和命令。确认只对本次发送生效。",
-                  "This message lets Codex access files and commands outside the workspace. This approval applies only to this message.",
+                  "本次消息允许执行器访问工作区之外的文件和命令。确认只对本次发送生效。",
+                  "This message lets the agent access files and commands outside the workspace. This approval applies only to this message.",
                 )}</p>
                 <div>
                   <button type="button" onClick={() => setPendingDangerInput(null)}>

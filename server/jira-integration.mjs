@@ -437,6 +437,63 @@ export function createJiraIntegration({ configStore, database, fetch: fetchImple
       return safeConfig(savedConfig, lastSyncedAt);
     },
     sync,
+    /**
+     * 按成员名单拉取资源日历议题：活跃或近 30 天完成的，
+     * 含任务开始/完成时间与截止日，由调用方展开成人×天格子。
+     */
+    async resourceCalendar(members) {
+      const config = await configStore.read();
+      if (!config) {
+        throw new ApiError(409, "JIRA_NOT_CONFIGURED", "Jira 尚未配置");
+      }
+      const dateFieldIds = await resolveCustomDateFieldIds(config);
+      const fields = [
+        "summary",
+        "description",
+        "status",
+        "assignee",
+        "duedate",
+        "parent",
+        ...dateFieldIds.start ? [dateFieldIds.start] : [],
+        ...dateFieldIds.due ? [dateFieldIds.due] : [],
+      ];
+      const jql = `assignee in (${members.map(quoteJqlString).join(", ")})`
+        + ` AND ((statusCategory != Done AND resolution = EMPTY) OR updated >= -30d)`
+        + ` ORDER BY assignee, updated DESC`;
+      const issues = [];
+      let startAt = 0;
+      while (true) {
+        const page = await request(config, "/rest/api/2/search", {
+          method: "POST",
+          body: JSON.stringify({ jql, startAt, maxResults: 100, fields }),
+        });
+        const pageIssues = Array.isArray(page?.issues) ? page.issues : [];
+        issues.push(...pageIssues);
+        startAt += pageIssues.length;
+        if (pageIssues.length === 0 || startAt >= Number(page?.total ?? 0)) break;
+      }
+      return issues.map((issue) => {
+        const f = issue?.fields ?? {};
+        const category = f.status?.statusCategory?.key;
+        return {
+          key: String(issue.key ?? ""),
+          parentKey: typeof f.parent?.key === "string" ? f.parent.key : null,
+          parentSummary: limitedString(f.parent?.fields?.summary, "", 240) || null,
+          summary: limitedString(f.summary, "", 240),
+          description: typeof f.description === "string" ? f.description.slice(0, 2_000) : "",
+          assignee: limitedString(f.assignee?.displayName, "未指派", 120),
+          done: category === "done",
+          startDate: (dateFieldIds.start && typeof f[dateFieldIds.start] === "string"
+            ? f[dateFieldIds.start]
+            : null),
+          endDate: (dateFieldIds.due && typeof f[dateFieldIds.due] === "string"
+            ? f[dateFieldIds.due]
+            : null),
+          dueDate: typeof f.duedate === "string" ? f.duedate : null,
+        };
+      });
+    },
+
     async disconnect() {
       await configStore.clear();
       lastSyncedAt = null;

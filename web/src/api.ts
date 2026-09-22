@@ -28,6 +28,7 @@ import type {
   ProjectReadme,
   ProjectReadmeAttachment,
   ProjectSummary,
+  ResourceCalendarMonth,
   Task,
   TaskChangeActivity,
   TaskboardMetadata,
@@ -194,6 +195,20 @@ export async function syncJiraConnection(): Promise<JiraConnection> {
     method: "POST",
   });
   return data.connection;
+}
+
+export async function getResourceCalendar(
+  month: string,
+  members: string[],
+  signal?: AbortSignal,
+): Promise<ResourceCalendarMonth> {
+  const query = new URLSearchParams({ month });
+  if (members.length > 0) query.set("members", members.join(","));
+  const data = await request<ResourceCalendarMonth>(
+    `/api/local/jira-resource-calendar?${query.toString()}`,
+    { signal },
+  );
+  return data;
 }
 
 export async function disconnectJiraConnection(): Promise<void> {
@@ -422,6 +437,7 @@ export async function createAiChatThread(input: {
   projectId: string;
   issueId?: string;
   title?: string;
+  agent?: "codex" | "claude-code";
   model?: string;
   reasoningEffort?: string;
   sandbox?: AiChatSandbox;

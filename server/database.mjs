@@ -475,6 +475,7 @@ function aiChatThreadFromRow(row) {
       ...(row.origin_issue_identifier ? { issueIdentifier: row.origin_issue_identifier } : {}),
     },
     codexThreadId: row.codex_thread_id,
+    agent: row.agent ?? "codex",
     model: row.model,
     reasoningEffort: row.reasoning_effort,
     sandbox: row.sandbox,
@@ -728,6 +729,7 @@ export class TaskboardDatabase {
         origin_issue_id TEXT,
         origin_issue_identifier TEXT,
         codex_thread_id TEXT,
+        agent TEXT NOT NULL DEFAULT 'codex' CHECK (agent IN ('codex', 'claude-code')),
         model TEXT NOT NULL,
         reasoning_effort TEXT NOT NULL,
         sandbox TEXT NOT NULL CHECK (sandbox IN (
@@ -841,6 +843,13 @@ export class TaskboardDatabase {
     }
     if (!taskColumns.some((column) => column.name === "recurrence_unit")) {
       this.database.exec("ALTER TABLE tasks ADD COLUMN recurrence_unit TEXT");
+    }
+
+    const aiThreadColumns = this.database.prepare("PRAGMA table_info(ai_chat_threads)").all();
+    if (!aiThreadColumns.some((column) => column.name === "agent")) {
+      this.database.exec(
+        "ALTER TABLE ai_chat_threads ADD COLUMN agent TEXT NOT NULL DEFAULT 'codex'",
+      );
     }
     this.#migrateTaskStatuses();
     const migratedTaskColumns = this.database.prepare("PRAGMA table_info(tasks)").all();
@@ -2021,9 +2030,9 @@ export class TaskboardDatabase {
         id, title, status,
         origin_project_id, origin_project_name, origin_workspace_path,
         origin_issue_id, origin_issue_identifier,
-        codex_thread_id, model, reasoning_effort, sandbox,
+        codex_thread_id, agent, model, reasoning_effort, sandbox,
         created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id,
       input.title,
@@ -2034,6 +2043,7 @@ export class TaskboardDatabase {
       input.origin.issueId ?? null,
       input.origin.issueIdentifier ?? null,
       input.codexThreadId ?? null,
+      input.agent ?? "codex",
       input.model,
       input.reasoningEffort,
       input.sandbox,

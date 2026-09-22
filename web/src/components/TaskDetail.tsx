@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useMemo,
   useRef,
   useState,
   type KeyboardEvent,
@@ -27,6 +28,7 @@ import {
   useTaskboardI18n,
   type TaskboardLanguage,
 } from "../i18n";
+import { resolveEffectiveDevelopmentContext } from "../taskExecutionContext";
 import { TASK_PRIORITIES, TASK_STATUSES } from "../types";
 import type {
   ActorIdentity,
@@ -132,6 +134,7 @@ interface TaskDetailProps {
   onOpenThread: (binding: CodexThreadBinding) => void;
   onOpenLegacyLocalThread: (threadId: string) => void;
   onOpenInThread: (task: Task) => void;
+  buildAiPrompt: (task: Task) => Promise<string>;
   onDelete: (task: Task) => void;
   onCopy: (text: string, announcement: string) => void;
   openingThread: boolean;
@@ -354,10 +357,12 @@ function ConversationLink({
   threadId,
   onOpen,
   onCopy,
+  onViewContext,
 }: {
   threadId: string;
   onOpen: () => void;
   onCopy: (text: string, announcement: string) => void;
+  onViewContext: () => void;
 }) {
   const { text } = useTaskboardI18n();
   return (
@@ -385,6 +390,142 @@ function ConversationLink({
         <CodexResumeIcon />
         <span>{text("复制终端命令", "Copy terminal command")}</span>
       </button>
+      <button
+        className="issue-conversation-copy"
+        type="button"
+        title={text("查看任务与继承的上下文", "View task and inherited context")}
+        onClick={onViewContext}
+      >
+        <BranchIcon color="currentColor" size={16} />
+        <span>{text("查看上下文", "View context")}</span>
+      </button>
+    </div>
+  );
+}
+
+function ContextViewDialog({
+  task,
+  tasks,
+  referenceTasks,
+  comments,
+  attachments,
+  buildAiPrompt,
+  onCopy,
+  onClose,
+}: {
+  task: Task;
+  tasks: Task[];
+  referenceTasks: Task[];
+  comments: Comment[];
+  attachments: Attachment[];
+  buildAiPrompt: (task: Task) => Promise<string>;
+  onCopy: (text: string, announcement: string) => void;
+  onClose: () => void;
+}) {
+  const { text } = useTaskboardI18n();
+  const [prompt, setPrompt] = useState("");
+  useEffect(() => {
+    let cancelled = false;
+    void buildAiPrompt(task).then((value) => {
+      if (!cancelled) setPrompt(value);
+    }, () => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [task.id, buildAiPrompt]);
+
+  /** 完整上下文包：codex-native 自动化按此全量内嵌；CLI 执行器由 agent 拉取同样的内容。 */
+  const fullContext = useMemo(() => {
+    const chain = [];
+    const pool = new Map<string, Task>();
+    for (const candidate of [...tasks, ...referenceTasks]) pool.set(candidate.id, candidate);
+    const visited = new Set<string>();
+    let current: Task | undefined = task;
+    while (current && !visited.has(current.id)) {
+      visited.add(current.id);
+      chain.push(current);
+      current = current.relations.parent ? pool.get(current.relations.parent.id) : undefined;
+    }
+    const lines: string[] = [];
+    // 继承的父任务上下文与发送内容逐字一致（从完整指令中提取），
+    // 保证弹窗展示 = AI 实际收到；置于最前，先背景后当前任务。
+    const parentSummary = prompt.split("\n").slice(1).join("\n").trim();
+    if (parentSummary) {
+      lines.push(`【继承的父任务上下文】`);
+      lines.push(parentSummary);
+      lines.push("");
+    } else {
+      for (const parent of chain.slice(1)) {
+        lines.push(`【继承父任务】${parent.identifier} ${parent.title}`);
+        const parentDescription = parent.description.trim();
+        if (parentDescription) lines.push(parentDescription.replace(/\s+/g, " ").slice(0, 600));
+      }
+      lines.push("");
+    }
+    lines.push(`【任务】${task.identifier} ${task.title}`);
+    lines.push(`【状态】${task.status}`);
+    const resolved = resolveEffectiveDevelopmentContext(task, tasks);
+    if (resolved.context) {
+      lines.push(resolved.context.type === "worktree"
+        ? `【执行环境】worktree · ${resolved.context.branch ?? "detached"} · ${resolved.context.path}`
+        : `【执行环境】branch · ${resolved.context.branch}`);
+    }
+    lines.push(`【描述】`);
+    lines.push(task.description.trim() || "（空）");
+    if (comments.length > 0) {
+      lines.push(`【评论】(${comments.length})`);
+      comments.forEach((comment, index) => {
+        lines.push(`${index + 1}. ${comment.authorName} ${comment.createdAt}`);
+        lines.push(comment.body.trim() || "（空）");
+        for (const commentAttachment of comment.attachments) {
+          lines.push(`   附件：${commentAttachment.filename} (${commentAttachment.contentType})`);
+        }
+      });
+    }
+    if (attachments.length > 0) {
+      lines.push(`【附件】(${attachments.length})`);
+      for (const attachment of attachments) {
+        lines.push(`- ${attachment.filename} (${attachment.contentType})`);
+      }
+    }
+    return lines.join("\n");
+  }, [task, tasks, referenceTasks, comments, attachments, prompt]);
+
+
+  return (
+    <div
+      className="delete-backdrop"
+      onPointerDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <div
+        className="delete-dialog context-view-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="context-view-title"
+        onKeyDown={(event) => {
+          if (event.key === "Escape") onClose();
+        }}
+      >
+        <h2 id="context-view-title">{text("发给 AI 的完整上下文", "Full context sent to AI")}</h2>
+        <div className="context-view-prompt">
+          <pre>{fullContext}</pre>
+          <button
+            className="button secondary"
+            type="button"
+            onClick={() => onCopy(fullContext, text("完整上下文已复制。", "Full context copied."))}
+          >
+            {text("复制完整上下文", "Copy full context")}
+          </button>
+
+        </div>
+        <div>
+          <button className="button primary" type="button" onClick={onClose}>
+            {text("关闭", "Close")}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -408,6 +549,7 @@ export function TaskDetail({
   onOpenThread,
   onOpenLegacyLocalThread,
   onOpenInThread,
+  buildAiPrompt,
   onDelete,
   onCopy,
   openingThread,
@@ -419,6 +561,7 @@ export function TaskDetail({
   const [currentTask, setCurrentTask] = useState(task);
   const [title, setTitle] = useState(task.title);
   const [titleFocused, setTitleFocused] = useState(false);
+  const [contextViewTaskId, setContextViewTaskId] = useState<string | null>(null);
   const [description, setDescription] = useState(task.description);
   const [descriptionSegments, setDescriptionSegments] = useState<InlineMediaSegment[]>(
     () => createInlineMediaSegments(task.description, referenceTasks),
@@ -1198,6 +1341,7 @@ export function TaskDetail({
                         ? onOpenThread(currentTask.threadBinding)
                         : onOpenLegacyLocalThread(currentTask.legacyLocalThreadId!)}
                       onCopy={onCopy}
+                      onViewContext={() => setContextViewTaskId(currentTask.id)}
                     />
                   </div>
                 )}
@@ -1595,6 +1739,7 @@ export function TaskDetail({
                               ? onOpenThread(comment.threadBinding)
                               : onOpenLegacyLocalThread(comment.legacyLocalThreadId!)}
                             onCopy={onCopy}
+                            onViewContext={() => setContextViewTaskId(currentTask.id)}
                           />
                         </div>
                       )}
@@ -2106,6 +2251,24 @@ export function TaskDetail({
           </div>
         </div>
       )}
+
+      {contextViewTaskId && (() => {
+        const contextTask = contextViewTaskId === currentTask.id
+          ? currentTask
+          : [...tasks, ...referenceTasks].find((candidate) => candidate.id === contextViewTaskId) ?? null;
+        return contextTask ? (
+          <ContextViewDialog
+            task={contextTask}
+            tasks={tasks}
+            referenceTasks={referenceTasks}
+            comments={contextTask.id === currentTask.id ? comments : []}
+            attachments={contextTask.id === currentTask.id ? visibleTaskAttachments : []}
+            buildAiPrompt={buildAiPrompt}
+            onCopy={onCopy}
+            onClose={() => setContextViewTaskId(null)}
+          />
+        ) : null;
+      })()}
     </section>
   );
 }

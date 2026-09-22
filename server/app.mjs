@@ -21,6 +21,7 @@ import {
   isTaskStatus,
 } from "../shared/domain.mjs";
 import { resolveCodexExecutable } from "../shared/codex-executable.mjs";
+import { resolveClaudeCodeExecutable } from "./agent-runtime.mjs";
 import { withoutTaskboardLauncherEnvironment } from "../shared/codex-environment.mjs";
 import { AiChatService } from "./ai-chat.mjs";
 import { AutoClaimService } from "./auto-claim.mjs";
@@ -990,16 +991,24 @@ function parseAiThreadCreate(body) {
     "projectId",
     "issueId",
     "title",
+    "agent",
     "model",
     "reasoningEffort",
     "sandbox",
   ]));
+  if (body.agent !== undefined && body.agent !== "codex" && body.agent !== "claude-code") {
+    throw new ApiError(400, "INVALID_FIELD", "'agent' must be 'codex' or 'claude-code'");
+  }
   return {
     projectId: validateProjectId(body.projectId),
     issueId: parseAiSetting(body.issueId, "issueId", 128),
     title: parseAiSetting(body.title, "title", 160),
-    model: parseAiSetting(body.model, "model", 128),
-    reasoningEffort: parseAiSetting(body.reasoningEffort, "reasoningEffort", 64),
+    agent: body.agent ?? "codex",
+    // 空模型/推理强度是合法值（如 Claude Code 线程用默认模型）。
+    model: typeof body.model === "string" ? body.model.trim().slice(0, 128) : "",
+    reasoningEffort: typeof body.reasoningEffort === "string"
+      ? body.reasoningEffort.trim().slice(0, 64)
+      : "",
     sandbox: parseAiSandbox(body.sandbox),
   };
 }
@@ -1607,6 +1616,154 @@ async function resolveProjectWorkspace(project, codexProjectId, codexThreadId, c
   }
 }
 
+function expandDateRanges(value) {
+  const ranges = [];
+  for (const item of Array.isArray(value) ? value : []) {
+    if (typeof item !== "string") continue;
+    const match = /^(\d{4}-\d{2}-\d{2})(?:~(\d{4}-\d{2}-\d{2}))?$/.exec(item.trim());
+    if (!match) continue;
+    ranges.push({ start: match[1], end: match[2] ?? match[1] });
+  }
+  return ranges;
+}
+
+function dateInRange(date, ranges) {
+  return ranges.some(({ start, end }) => date >= start && date <= end);
+}
+
+const HOLIDAY_CN_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const holidayCnCache = new Map();
+
+function parseHolidayCn(parsed) {
+  if (!Array.isArray(parsed?.days)) return null;
+  const holidays = [];
+  const workdays = [];
+  for (const day of parsed.days) {
+    if (typeof day?.date !== "string") continue;
+    (day.isOffDay ? holidays : workdays).push({ start: day.date, end: day.date });
+  }
+  return { holidays, workdays };
+}
+
+/**
+ * 法定假日来自 holiday-cn（数据源为国务院公告，每年更新），
+ * 内存 + 磁盘双层缓存；网络不可用时退回旧缓存或本地配置。
+ */
+async function fetchHolidayCnYear(year, dataDirectory) {
+  const cached = holidayCnCache.get(year);
+  if (cached && Date.now() - cached.fetchedAt < HOLIDAY_CN_TTL_MS) {
+    return { holidays: cached.holidays, workdays: cached.workdays };
+  }
+  const cachePath = path.join(dataDirectory, `holiday-cn-${year}.json`);
+  const fromDisk = async () => {
+    try {
+      const entry = parseHolidayCn(JSON.parse(await readFile(cachePath, "utf8")));
+      if (entry) holidayCnCache.set(year, { ...entry, fetchedAt: Date.now() });
+      return entry;
+    } catch {
+      return null;
+    }
+  };
+  try {
+    const stats = await stat(cachePath);
+    if (Date.now() - stats.mtimeMs < HOLIDAY_CN_TTL_MS) {
+      const entry = await fromDisk();
+      if (entry) return entry;
+    }
+  } catch {}
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8_000);
+    timer.unref?.();
+    const response = await fetch(
+      `https://cdn.jsdelivr.net/gh/NateScarlet/holiday-cn@master/${year}.json`,
+      { signal: controller.signal },
+    );
+    clearTimeout(timer);
+    if (response.ok) {
+      const raw = await response.json();
+      const entry = parseHolidayCn(raw);
+      if (entry) {
+        try {
+          await writeFile(cachePath, JSON.stringify(raw));
+        } catch {}
+        holidayCnCache.set(year, { ...entry, fetchedAt: Date.now() });
+        return entry;
+      }
+    }
+  } catch {}
+  return fromDisk();
+}
+
+async function readResourceCalendarConfig(configPath) {
+  try {
+    const parsed = JSON.parse(await readFile(configPath, "utf8"));
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("invalid");
+    }
+    return {
+      depts: parsed.depts && typeof parsed.depts === "object" && !Array.isArray(parsed.depts)
+        ? Object.fromEntries(Object.entries(parsed.depts).flatMap(([dept, names]) => {
+          if (typeof dept !== "string" || !Array.isArray(names)) return [];
+          const members = names.filter((name) => typeof name === "string" && name.trim());
+          return members.length > 0 ? [[dept, members]] : [];
+        }))
+        : {},
+      holidays: expandDateRanges(parsed.holidays),
+      workdays: expandDateRanges(parsed.workdays),
+    };
+  } catch {
+    return { depts: {}, holidays: [], workdays: [] };
+  }
+}
+
+function buildResourceCalendarMonth(month, issues, calendarConfig) {
+  const [year, monthNumber] = month.split("-").map(Number);
+  const daysInMonth = new Date(Date.UTC(year, monthNumber, 0)).getUTCDate();
+  const days = [];
+  for (let day = 1; day <= daysInMonth; day += 1) {
+    const iso = `${month}-${String(day).padStart(2, "0")}`;
+    const weekday = new Date(Date.UTC(year, monthNumber - 1, day)).getUTCDay();
+    const nonWorkday = dateInRange(iso, calendarConfig.workdays)
+      ? false
+      : dateInRange(iso, calendarConfig.holidays) || weekday === 0 || weekday === 6;
+    days.push({ day, iso, weekday, nonWorkday });
+  }
+  const issuesByMember = new Map();
+  for (const issue of issues) {
+    // 区间：开始~完成，缺失时用截止日补齐；完全没有日期的不进日历。
+    const start = issue.startDate ?? issue.dueDate ?? null;
+    const end = issue.endDate ?? issue.dueDate ?? start;
+    if (!start || !end || start > end) continue;
+    if (end < days[0].iso || start > days[daysInMonth - 1].iso) continue;
+    if (!issuesByMember.has(issue.assignee)) issuesByMember.set(issue.assignee, []);
+    issuesByMember.get(issue.assignee).push({ ...issue, start, end });
+  }
+  const rows = [];
+  for (const [dept, members] of Object.entries(calendarConfig.depts)) {
+    for (const member of members) {
+      const memberIssues = issuesByMember.get(member) ?? [];
+      const cells = days.map(({ iso, nonWorkday }) => ({
+        nonWorkday,
+        items: memberIssues
+          .filter((issue) => iso >= issue.start && iso <= issue.end)
+          .map((issue) => ({
+            key: issue.key,
+            parentKey: issue.parentKey ?? issue.key,
+            parentSummary: issue.parentSummary,
+            summary: issue.summary,
+            description: issue.description,
+            done: issue.done,
+            start: issue.start,
+            end: issue.end,
+          })),
+      }));
+      rows.push({ dept, member, cells });
+    }
+  }
+  return { month, days, rows };
+}
+
 async function parseWorktrees(output) {
   const contexts = [];
   for (const block of output.trim().split(/\n\s*\n/)) {
@@ -1691,12 +1848,15 @@ export function resolveServerOptions(options = {}) {
     attachmentsDirectory: options.attachmentsDirectory ?? path.join(dataDirectory, "attachments"),
     cloudConfigPath: options.cloudConfigPath ?? path.join(dataDirectory, "cloud-companion.json"),
     jiraConfigPath: options.jiraConfigPath ?? path.join(dataDirectory, "jira-connection.json"),
+    resourceCalendarConfigPath: options.resourceCalendarConfigPath
+      ?? path.join(dataDirectory, "resource-calendar.json"),
     clientStoragePath: options.clientStoragePath ?? path.join(dataDirectory, "client-storage.json"),
     staticDirectory: options.staticDirectory ?? path.join(PROJECT_ROOT, "dist", "web"),
     skillPath: options.skillPath
       ?? environment.CODEX_TASKBOARD_SKILL_PATH
       ?? path.join(PROJECT_ROOT, "skills", "manage-taskboard", "SKILL.md"),
     codexExecutable: resolveCodexExecutable({ explicit: options.codexExecutable }),
+    claudeCodeExecutable: resolveClaudeCodeExecutable({ explicit: options.claudeCodeExecutable }),
     codexStatePath: options.codexStatePath
       ?? path.join(codexHome, ".codex-global-state.json"),
     codexProcessesPath: options.codexProcessesPath
@@ -1916,6 +2076,7 @@ export function createTaskboardServer(options = {}) {
   const aiChat = new AiChatService({
     database,
     codexExecutable: resolved.codexExecutable,
+    claudeCodeExecutable: resolveClaudeCodeExecutable({ explicit: options.claudeCodeExecutable }),
     codexStatePath: resolved.codexStatePath,
     manageTaskboardSkillPath: resolved.skillPath,
     processEnv: codexProcessEnvironment,
@@ -2288,6 +2449,41 @@ export function createTaskboardServer(options = {}) {
           return sendJson(response, 200, { mode: "local", authenticated: false });
         }
         return methodNotAllowed(response, ["GET", "PUT", "DELETE"]);
+      }
+
+      if (pathname === "/api/local/jira-resource-calendar") {
+        if (request.method !== "GET") return methodNotAllowed(response, ["GET"]);
+        assertAllowedQuery(
+          url.searchParams,
+          new Set(["month", "members"]),
+          "GET /api/local/jira-resource-calendar",
+        );
+        const monthParam = url.searchParams.get("month");
+        if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(monthParam ?? "")) {
+          throw new ApiError(400, "INVALID_FIELD", "'month' must be formatted as YYYY-MM");
+        }
+        const calendarConfig = await readResourceCalendarConfig(resolved.resourceCalendarConfigPath);
+        const holidayCn = await fetchHolidayCnYear(Number(monthParam.slice(0, 4)), resolved.dataDirectory);
+        const calendarMerged = {
+          depts: calendarConfig.depts,
+          holidays: [...(holidayCn?.holidays ?? []), ...calendarConfig.holidays],
+          workdays: [...(holidayCn?.workdays ?? []), ...calendarConfig.workdays],
+        };
+        const configured = new Set(Object.values(calendarConfig.depts).flat());
+        if (configured.size === 0) {
+          return sendJson(response, 200, { month: monthParam, days: [], rows: [] });
+        }
+        const requested = (url.searchParams.get("members") ?? "")
+          .split(",")
+          .map((name) => name.trim())
+          .filter((name) => configured.has(name));
+        const members = requested.length > 0 ? requested : [...configured];
+        const issues = await jira.resourceCalendar(members);
+        return sendJson(response, 200, buildResourceCalendarMonth(
+          monthParam,
+          issues,
+          calendarMerged,
+        ));
       }
 
       if (pathname === "/api/local/jira-connection") {

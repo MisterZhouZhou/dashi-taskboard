@@ -50,6 +50,8 @@ import {
   syncJiraConnection,
   uploadAttachment,
   updateTask as updateTaskRequest,
+  listAttachments,
+  listComments,
 } from "./api";
 import {
   actorKey,
@@ -78,6 +80,7 @@ import {
   DeleteIcon,
   MoreIcon,
   PlusIcon,
+  CalendarIcon,
   RefreshIcon,
   RelationIcon,
 } from "./components/SemanticIcons";
@@ -143,6 +146,8 @@ import {
   type TaskboardMetadata,
   type TaskDraft,
   type TaskStatus,
+  type Attachment,
+  type Comment as AppComment,
 } from "./types";
 // The poller stays in ESM JavaScript so its lifecycle can be tested directly with node:test.
 // @ts-expect-error The module's option contract is enforced by its focused node tests.
@@ -151,7 +156,7 @@ import { createRevisionPoller, createRevisionWebSocketClient, getRevisionPolling
 type ConnectionState = "connecting" | "live" | "reconnecting";
 type Theme = "light" | "dark";
 type ThemeMode = "auto" | Theme;
-type BoardView = "readme" | "dashboard" | "issues" | "list" | "gantt";
+type BoardView = "readme" | "dashboard" | "issues" | "list" | "gantt" | "calendar";
 type DetailSourceScroll =
   | { projectId: string; view: "issues"; status: TaskStatus; scrollTop: number }
   | { projectId: string; view: "list"; scrollTop: number };
@@ -176,6 +181,9 @@ const AiChat = lazy(() => import("./components/AiChat").then((module) => ({
 })));
 const GanttView = lazy(() => import("./components/GanttView").then((module) => ({
   default: module.GanttView,
+})));
+const ResourceCalendarView = lazy(() => import("./components/ResourceCalendarView").then((module) => ({
+  default: module.ResourceCalendarView,
 })));
 
 interface EditorState {
@@ -337,7 +345,7 @@ function readIssueActivityKeys(storageKey: string): Record<string, string> {
 
 function readProjectBoardView(projectId: string): BoardView {
   const view = taskboardStorage.getItem(`${PROJECT_VIEW_KEY_PREFIX}${projectId}`);
-  return view === "readme" || view === "dashboard" || view === "list" || view === "gantt" || view === "issues"
+  return view === "readme" || view === "dashboard" || view === "list" || view === "gantt" || view === "calendar" || view === "issues"
     ? view
     : "issues";
 }
@@ -3166,9 +3174,35 @@ export function App() {
     return liveProject ? baseIdentity : null;
   }
 
+  /** 拉取父任务的评论与附件，用于组装继承的完整上下文。 */
+  async function loadParentContextPayload(task: Task): Promise<{
+    comments: AppComment[];
+    attachments: Attachment[];
+  }> {
+    const parentId = task.relations.parent?.id;
+    if (!task.inheritParentContext || !parentId) return { comments: [], attachments: [] };
+    try {
+      const [comments, attachments] = await Promise.all([
+        listComments(parentId).catch(() => []),
+        listAttachments(parentId).catch(() => []),
+      ]);
+      return { comments, attachments };
+    } catch {
+      return { comments: [], attachments: [] };
+    }
+  }
+
+  async function buildTaskAiPrompt(task: Task): Promise<string> {
+    const { comments, attachments } = await loadParentContextPayload(task);
+    const inheritedParentSummary = buildParentContextSummary(task, tasksRef.current, comments, attachments);
+    return `[$manage-taskboard](${manageTaskboardSkillPath}) 议题 ID：${task.identifier}${inheritedParentSummary ? `\n${inheritedParentSummary}` : ""}`;
+  }
+
   async function openTaskInThread(task: Task) {
     const effectiveDevelopmentContext = resolveEffectiveDevelopmentContext(task, tasksRef.current).context;
-    const inheritedParentSummary = buildParentContextSummary(task, tasksRef.current);
+    const inheritedParentSummary = await buildTaskAiPrompt(task).then((prompt) => (
+      prompt.split("\n").slice(1).join("\n")
+    ));
     const standalone = !embedded || window.parent === window;
     const projectless = task.projectId === GLOBAL_PROJECT_ID;
     const taskboardProject = projects.find((project) => project.id === task.projectId);
@@ -3813,6 +3847,17 @@ export function App() {
                 <RefreshIcon color="currentColor" />
               </button>
             )}
+            {isJiraProject && (
+              <button
+                className={`icon-button${boardView === "calendar" ? " is-active" : ""}`}
+                type="button"
+                onClick={() => setBoardView("calendar")}
+                aria-label={text("资源日历", "Resource calendar")}
+                title={text("资源日历", "Resource calendar")}
+              >
+                <CalendarIcon color="currentColor" />
+              </button>
+            )}
             {selectedProjectId && !isJiraProject && (
               <button
                 className="icon-button header-create-button"
@@ -3827,7 +3872,7 @@ export function App() {
           </div>
         </header>
 
-        {selectedProjectId && !detailTask && <div className="board-toolbar">
+        {selectedProjectId && !detailTask && boardView !== "calendar" && <div className="board-toolbar">
           <div className="view-tabs" aria-label={text("看板视图", "Board views")}>
             <button
               className={`view-tab${boardView === "dashboard" ? " active" : ""}`}
@@ -4007,6 +4052,7 @@ export function App() {
             onOpenThread={openThread}
             onOpenLegacyLocalThread={openLegacyLocalThread}
             onOpenInThread={openTaskInThread}
+            buildAiPrompt={buildTaskAiPrompt}
             onDelete={setPendingTaskDelete}
             onCopy={(text, message) => void copyText(text, message)}
             openingThread={openingThreadTaskId === detailTask.id}
@@ -4094,6 +4140,15 @@ export function App() {
               todayRequest={ganttTodayRequest}
               onOpenTask={openTaskDetail}
               onUpdate={updateTaskProperties}
+            />
+          </Suspense>
+        ) : boardView === "calendar" ? (
+          <Suspense fallback={<div className="board-view-loading">{text("正在打开资源日历…", "Opening resource calendar…")}</div>}>
+            <ResourceCalendarView
+              me={jiraConnection?.displayName ?? null}
+              jiraBaseUrl={jiraConnection?.baseUrl ?? null}
+              onBack={() => setBoardView("issues")}
+              onError={setActionError}
             />
           </Suspense>
         ) : (
