@@ -438,8 +438,8 @@ export function createJiraIntegration({ configStore, database, fetch: fetchImple
     },
     sync,
     /**
-     * 按成员名单拉取资源日历议题：活跃或近 30 天完成的，
-     * 含任务开始/完成时间与截止日，由调用方展开成人×天格子。
+     * 按成员名单拉取资源日历议题：不限状态与更新时间，取成员全量，
+     * 含任务开始/完成时间与截止日，由调用方按月过滤后展开成人×天格子。
      */
     async resourceCalendar(members) {
       const config = await configStore.read();
@@ -458,7 +458,6 @@ export function createJiraIntegration({ configStore, database, fetch: fetchImple
         ...dateFieldIds.due ? [dateFieldIds.due] : [],
       ];
       const jql = `assignee in (${members.map(quoteJqlString).join(", ")})`
-        + ` AND ((statusCategory != Done AND resolution = EMPTY) OR updated >= -30d)`
         + ` ORDER BY assignee, updated DESC`;
       const issues = [];
       let startAt = 0;
