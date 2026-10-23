@@ -12558,6 +12558,13 @@ kbd {
   cursor: pointer;
 }
 
+.resource-calendar-members-panel .resource-calendar-members-all {
+  grid-column: 1 / -1;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border, #d0d3d6);
+  font-weight: 500;
+}
+
 .resource-calendar-scroll {
   flex: 1;
   min-height: 0;

@@ -266,6 +266,16 @@ export function ResourceCalendarView({ me, jiraBaseUrl, onBack }: ResourceCalend
         <details className="resource-calendar-members" ref={membersRef}>
           <summary>{text("成员", "Members")}{` ${visibleMembers.length}/${allMembers.length || "…"}`}</summary>
           <div className="resource-calendar-members-panel">
+            <label className="resource-calendar-members-all">
+              <input
+                type="checkbox"
+                checked={allMembers.length > 0 && visibleMembers.length === allMembers.length}
+                onChange={(event) => {
+                  setSelected(event.target.checked ? allMembers : (me ? [me] : []));
+                }}
+              />
+              <span>{text("全选", "All")}</span>
+            </label>
             {allMembers.map((member) => (
               <label key={member}>
                 <input
